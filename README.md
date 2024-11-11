@@ -1,43 +1,9 @@
 # Margin-aware Preference Optimization for Aligning Diffusion Models without Reference (MaPO)
 
-~~This repository provides the official PyTorch implementation for MaPO. ~~
+~~This repository provides the official PyTorch implementation for MaPO. ~~  
 This is a fork of the original repository, with some modifications to the training script to support 8-bit Adam and AdEMAMix optimizers to do some experiments.
 
-<div align="center">
-<img src="assets/mapo_overview.png" width=750/>
-</div><br>
-
-_By: Jiwoo Hong<sup>\*</sup>, Sayak Paul<sup>\*</sup>, Noah Lee, Kashif Rasul, James Thorne, Jongheon Jeong_
-<br>_(<small><sup>*</sup> indicates equal contribution</small>)_
-
-For the paper, models, datasets, etc., please visit the [project website](https://mapo-t2i.github.io/).
-
-**Contents**:
-
-* [Running MaPO training](#running-mapo-training)
-* [Models and Datasets](#models-and-datasets) 
-* [Inference](#inference)
-* [Citation](#citation)
-
 ## Running MaPO training
-
-### Hardware requirements
-
-We ran our experiments on a node of 8 H100s (80GB). But `train.py` can run on a single GPU having at least 40GB VRAM. 
-
-### Environment
-
-Create a Python virtual environment with your favorite package manager. 
-
-After activating the environment, install PyTorch. We recommend following the [official website](https://pytorch.org/) for this. 
-
-Finally, install the other requirements from `requirements.txt`. 
-
-### Steps to run the code
-
-We performed our experiments on the [`yuvalkirstain/pickapic_v2`](https://huggingface.co/datasets/yuvalkirstain/pickapic_v2) dataset which is 335 GB in size. However, here's another smaller version of the dataset that can be used for debugging -- [`kashif/pickascore`](https://huggingface.co/datasets/kashif/pickascore).
-
-When using `yuvalkirstain/pickapic_v2`, be sure to specify the `--dataset_split_name` CLI arg as `train`.
 
 Below is an example training command for a single-GPU run:
 
