@@ -121,16 +121,3 @@ pipeline = DiffusionPipeline.from_pretrained(sdxl_id, vae=vae, unet=unet, torch_
 prompt = "A lion with eagle wings coming out of the sea , digital Art, Greg rutkowski, Trending artstation, cinematographic, hyperrealistic"
 image = pipeline(prompt=prompt, num_inference_steps=30).images[0]
 ```
-
-## Citation
-
-```bibtex
-@misc{hong2024marginaware,
-    title={Margin-aware Preference Optimization for Aligning Diffusion Models without Reference}, 
-    author={Jiwoo Hong and Sayak Paul and Noah Lee and Kashif Rasul and James Thorne and Jongheon Jeong},
-    year={2024},
-    eprint={2406.06424},
-    archivePrefix={arXiv},
-    primaryClass={cs.CV}
-}
-```
