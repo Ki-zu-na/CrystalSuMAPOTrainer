@@ -12,23 +12,17 @@ def load_json_data(json_path: str) -> Dict:
     with open(json_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0, monochrome_threshold=0.8):
+def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0):
     imgscore = image_scores["imgscore"]
     anime_real_score = image_scores["anime_real_score"]
     aesthetic_score = image_scores["aesthetic_score"]
     scores_by_class = image_scores["scores_by_class"]
-    anime_style_age_score = image_scores["anime_style_age_score"]
-    monochrome_score = image_scores["monochrome_score"]
-    bad_anime_style_ages = ["1970s-", "1980s", "1990s", "2000s"]
     bad_imgscore_types = ["not_painting", "3d"]
     
     return (
         max(imgscore, key=imgscore.get) in bad_imgscore_types or
         anime_real_score["real"] > real_threshold or
-        aesthetic_score < aesthetic_threshold or
-        
-        max(anime_style_age_score, key=anime_style_age_score.get) in bad_anime_style_ages or
-        monochrome_score > monochrome_threshold
+        aesthetic_score < aesthetic_threshold
     )
     
 def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10) -> bool:
@@ -41,7 +35,7 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     bad_images = []
     
     for img_name, scores in results_json.items():
-        if not is_bad_image(scores, 0.5, 4.0, 0.8):
+        if not is_bad_image(scores, 0.5, 4.0):
             good_images.append((img_name, scores['aesthetic_score']))
         else:
             bad_images.append((img_name, scores['aesthetic_score']))
