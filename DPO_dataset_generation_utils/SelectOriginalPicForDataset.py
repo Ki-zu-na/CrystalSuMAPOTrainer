@@ -97,7 +97,14 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
 
 def find_image_path(artist_path: Path, image_name: str) -> Path:
     """Find the actual path of an image in the artist's directory structure"""
-    search_dirs = ['2020s', '2022s', 'new', 'unknown', 'undefined']
+    # Define allowed image extensions
+    allowed_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
+    
+    # Check if the image has allowed extension
+    if not any(image_name.lower().endswith(ext) for ext in allowed_extensions):
+        return None
+        
+    search_dirs = ['2010s', '2017s', '2020s', '2022s', 'new', 'unknown', 'undefined']
     for dir_name in search_dirs:
         img_path = artist_path / dir_name / image_name
         if img_path.exists():
