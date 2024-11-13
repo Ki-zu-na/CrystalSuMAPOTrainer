@@ -31,7 +31,7 @@ def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0, mono
         monochrome_score > monochrome_threshold
     )
     
-def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40) -> bool:
+def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10) -> bool:
     """Process single artist folder and select images"""
     # Load results.json
     results_json = load_json_data(artist_path / "results.json")
@@ -50,12 +50,13 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     bad_images.sort(key=lambda x: x[1], reverse=True)
     
     selected_images = []
+    retry_count = 0
     
     # Try to get initial 40 images from good images
     if len(good_images) >= target_count:
         candidates = random.sample(good_images, target_count)
         
-        while len(selected_images) < target_count:
+        while len(selected_images) < target_count and retry_count < max_retry:
             # Get full paths for current candidates
             candidate_paths = [find_image_path(artist_path, img[0]) for img in candidates]
             
@@ -71,14 +72,18 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
                     selected_images.append(candidates[i])
                     used_clusters.add(cluster)
             
-            # If we need more images
-            if len(selected_images) < target_count:
+            # If we need more images and haven't exceeded retry limit
+            if len(selected_images) < target_count and retry_count < max_retry - 1:
                 remaining_count = target_count - len(selected_images)
                 # Get new candidates from good_images, excluding already selected ones
                 new_candidates = random.sample([img for img in good_images 
                                              if img not in selected_images], 
                                              min(100, remaining_count))
                 candidates = selected_images + new_candidates
+                retry_count += 1
+            else:
+                # If we've reached max retries, accept what we have
+                break
     
     # If we still don't have enough images, use bad images
     if len(selected_images) < target_count:
@@ -86,13 +91,13 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
         selected_images.extend(bad_images[:remaining_count])
     
     # Copy selected images to output directory
-    if len(selected_images) == target_count:
+    if len(selected_images) > 0:  # Changed condition to copy even if we don't have full 40 images
         os.makedirs(output_path / artist_path.name, exist_ok=True)
         for img_name, _ in selected_images:
             src_path = find_image_path(artist_path, img_name)
             if src_path:
                 shutil.copy2(src_path, output_path / artist_path.name / img_name)
-        return True
+        return len(selected_images) == target_count
     
     return False
 
