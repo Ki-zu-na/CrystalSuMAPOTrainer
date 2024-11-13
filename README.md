@@ -1,6 +1,5 @@
 # Margin-aware Preference Optimization for Aligning Diffusion Models without Reference (MaPO)
 
-~~This repository provides the official PyTorch implementation for MaPO. ~~  
 This is a fork of the original repository, with some modifications to the training script to support 8-bit Adam and AdEMAMix optimizers to do some experiments.
 
 ## Running MaPO training
