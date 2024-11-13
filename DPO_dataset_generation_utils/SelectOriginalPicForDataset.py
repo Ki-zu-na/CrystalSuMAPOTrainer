@@ -63,10 +63,11 @@ def find_image_path(artist_path: Path, image_name: str) -> Path:
     if not any(image_name.lower().endswith(ext) for ext in allowed_extensions):
         return None
         
-    # Check in OriginalPic directory
-    img_path = artist_path / "OriginalPic" / image_name
-    if img_path.exists():
-        return img_path
+    search_dirs = ['2020s', '2022s', 'new', 'unknown', 'undefined']
+    for dir_name in search_dirs:
+        img_path = artist_path / dir_name / image_name
+        if img_path.exists():
+            return img_path
     return None
 
 def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10) -> bool:
@@ -74,11 +75,6 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     # Check if results.json exists
     if not (artist_path / "results.json").exists():
         print(f"Skipping {artist_path.name}: results.json not found")
-        return False
-        
-    # Check if OriginalPic directory exists
-    if not (artist_path / "OriginalPic").exists():
-        print(f"Skipping {artist_path.name}: OriginalPic directory not found")
         return False
     
     # Load results.json
@@ -160,20 +156,21 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     # Copy selected images and create new results.json
     if len(selected_images) > 0:
         artist_output_dir = output_path / artist_path.name
-        os.makedirs(artist_output_dir, exist_ok=True)
+        original_pic_dir = artist_output_dir / "OriginalPic"
+        os.makedirs(original_pic_dir, exist_ok=True)
         
         # 创建新的results.json数据
         selected_results = {}
         
         for img_name, _ in selected_images:
-            # 复制图片
+            # 复制图片到 OriginalPic 目录
             src_path = find_image_path(artist_path, img_name)
             if src_path:
-                shutil.copy2(src_path, artist_output_dir / img_name)
+                shutil.copy2(src_path, original_pic_dir / img_name)
                 # 保存对应的JSON数据
                 selected_results[img_name] = results_json[img_name]
         
-        # 保存新的results.json
+        # 保存新的results.json到artist根目录
         with open(artist_output_dir / "results.json", 'w', encoding='utf-8') as f:
             json.dump(selected_results, f, ensure_ascii=False, indent=4)
             
