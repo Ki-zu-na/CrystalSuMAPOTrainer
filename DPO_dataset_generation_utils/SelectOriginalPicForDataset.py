@@ -7,6 +7,7 @@ from typing import List, Dict
 from imgutils.metrics import lpips_clustering
 from PIL import Image
 from imgutils.validate import is_monochrome
+import argparse
 
 def load_json_data(json_path: str) -> Dict:
     """Load and parse results.json file"""
@@ -178,23 +179,79 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     
     return False
 
-def main():
-    # Set up paths
-    dataset_path = Path(r"G:\SDXL_large_Modified")
-    output_path = Path(r"G:\Dataset_selected_MAPO")
-    failed_artists = []
+def fix_missing_results(dataset_path: Path, source_dataset_path: Path):
+    """修复数据集中缺失的 results.json 条目"""
+    print("开始修复缺失的 results.json 条目...")
     
-    # Process each artist
     for artist_dir in dataset_path.iterdir():
-        if artist_dir.is_dir():
-            success = process_artist_folder(artist_dir, output_path)
-            if not success:
-                failed_artists.append(artist_dir.name)
+        if not artist_dir.is_dir():
+            continue
+            
+        results_path = artist_dir / "results.json"
+        original_pic_dir = artist_dir / "OriginalPic"
+        
+        if not results_path.exists() or not original_pic_dir.exists():
+            print(f"跳过 {artist_dir.name}: 缺少必要文件")
+            continue
+            
+        # 读取当前的 results.json
+        with open(results_path, 'r', encoding='utf-8') as f:
+            current_results = json.load(f)
+            
+        # 获取源数据集中对应艺术家的 results.json
+        source_artist_dir = source_dataset_path / artist_dir.name
+        source_results_path = source_artist_dir / "results.json"
+        
+        if not source_results_path.exists():
+            print(f"跳过 {artist_dir.name}: 源数据集中未找到 results.json")
+            continue
+            
+        with open(source_results_path, 'r', encoding='utf-8') as f:
+            source_results = json.load(f)
+            
+        # 检查每个图片是否有对应的 results 条目
+        modified = False
+        for img_path in original_pic_dir.iterdir():
+            if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.png', '.jpeg', '.webp']:
+                img_name = img_path.name
+                
+                if img_name not in current_results and img_name in source_results:
+                    print(f"为 {artist_dir.name}/{img_name} 添加缺失的 results 条目")
+                    current_results[img_name] = source_results[img_name]
+                    modified = True
+                    
+        # 如果有修改，保存更新后的 results.json
+        if modified:
+            with open(results_path, 'w', encoding='utf-8') as f:
+                json.dump(current_results, f, ensure_ascii=False, indent=4)
+            print(f"已更新 {artist_dir.name} 的 results.json")
+
+def main():
+    parser = argparse.ArgumentParser(description='处理数据集图片选择和标签修复')
+    parser.add_argument('--mode', choices=['select', 'fixtagger'], required=True,
+                      help='运行模式：select-选择图片，fixtagger-修复标签')
     
-    # Log failed artists
-    if failed_artists:
-        with open("failed_artists.txt", "w") as f:
-            f.write("\n".join(failed_artists))
+    args = parser.parse_args()
+    
+    # 直接指定路径
+    dataset_path = Path(r"G:\Dataset_selected_MAPO")
+    source_dataset_path = Path(r"G:\SDXL_large_Modified")
+    output_path = Path(r"G:\Dataset_selected_MAPO")
+    
+    if args.mode == 'select':
+        failed_artists = []
+        for artist_dir in source_dataset_path.iterdir():
+            if artist_dir.is_dir():
+                success = process_artist_folder(artist_dir, output_path)
+                if not success:
+                    failed_artists.append(artist_dir.name)
+        
+        if failed_artists:
+            with open("failed_artists.txt", "w") as f:
+                f.write("\n".join(failed_artists))
+                
+    elif args.mode == 'fixtagger':
+        fix_missing_results(dataset_path, source_dataset_path)
 
 if __name__ == "__main__":
     main()
