@@ -54,19 +54,33 @@ def count_images_in_dirs(artist_path: Path) -> int:
             total_images += len(list(dir_path.glob('*.webp')))
     return total_images
 
-def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40) -> bool:
-    """处理单个艺术家文件夹并选择图片"""
-    # 首先检查results.json是否存在
+def find_image_path(artist_path: Path, image_name: str) -> Path:
+    """Find the actual path of an image in the artist's directory structure"""
+    # Define allowed image extensions
+    allowed_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
+    
+    # Check if the image has allowed extension
+    if not any(image_name.lower().endswith(ext) for ext in allowed_extensions):
+        return None
+        
+    # Check in OriginalPic directory
+    img_path = artist_path / "OriginalPic" / image_name
+    if img_path.exists():
+        return img_path
+    return None
+
+def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10) -> bool:
+    """Process single artist folder and select images"""
+    # Check if results.json exists
     if not (artist_path / "results.json").exists():
         print(f"Skipping {artist_path.name}: results.json not found")
         return False
         
-    # 检查图片总数
-    total_images = count_images_in_dirs(artist_path)
-    if total_images < 20:
-        print(f"Skipping {artist_path.name}: only {total_images} images found")
+    # Check if OriginalPic directory exists
+    if not (artist_path / "OriginalPic").exists():
+        print(f"Skipping {artist_path.name}: OriginalPic directory not found")
         return False
-        
+    
     # Load results.json
     results_json = load_json_data(artist_path / "results.json")
     
@@ -166,17 +180,6 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
         return len(selected_images) == target_count
     
     return False
-
-def find_image_path(artist_path: Path, image_name: str) -> Path:
-    """在艺术家目录下查找图片文件"""
-    search_dirs = ['2020s', '2022s', 'new', 'unknown', 'undefined']
-    
-    for dir_name in search_dirs:
-        img_path = artist_path / dir_name / image_name
-        if img_path.exists():
-            return img_path
-            
-    return None
 
 def main():
     # Set up paths
