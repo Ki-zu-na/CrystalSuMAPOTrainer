@@ -17,10 +17,10 @@ class SDWebUIGenerator:
         self.retry_delay = retry_delay
         self.api = self._connect_with_retry()
         
-        self.negative_prompt = "lowres,bad hands,worst quality,watermark,censored,jpeg artifacts"
-        self.cfg_scale = 4.5
+        self.negative_prompt = "lowres,(bad),extra digits,2girls,bad hands,error,text,fewer,extra,missing,worst quality,jpeg artifacts,(low, old, early,mid)"
+        self.cfg_scale = 5.5
         self.steps = 35
-        self.sampler_name = 'DPM++ 2M'
+        self.sampler_name = 'DPM++ 2M SDE'
         self.scheduler = 'SGM Uniform'
         self.width = width
         self.height = height
@@ -31,7 +31,7 @@ class SDWebUIGenerator:
     def _connect_with_retry(self):
         while True:
             try:
-                api = webuiapi.WebUIApi(host=self.host, port=self.port, use_https=True)
+                api = webuiapi.WebUIApi(host=self.host, port=self.port, use_https=False)
                 api.util_get_model_names()
                 print("Successfully connected to the SD Web UI API")
                 return api
@@ -65,11 +65,26 @@ class SDWebUIGenerator:
 
     def _adjust_size(self, original_size, width, height):
         orig_width, orig_height = original_size
-        if orig_height > orig_width * 1.15:
-            return 832, 1218
-        elif orig_width > orig_height * 1.15:
-            return 1218, 832
-        return width or self.width, height or self.height
+        
+        # 如果两边都小于1600，直接使用原始尺寸
+        if orig_width <= 1600 and orig_height <= 1600:
+            return orig_width, orig_height
+        
+        # 处理超过1600的情况
+        if orig_width > orig_height:
+            # 宽度是最大边
+            if orig_width > 1600:
+                new_width = 1600
+                new_height = int(orig_height * (1600 / orig_width))
+                return new_width, new_height
+        else:
+            # 高度是最大边
+            if orig_height > 1600:
+                new_height = 1600
+                new_width = int(orig_width * (1600 / orig_height))
+                return new_width, new_height
+            
+        return orig_width, orig_height
 
     def _get_negative_prompt(self, group):
         if group == 'new':
@@ -119,19 +134,22 @@ class ImageGenerator:
                 with Image.open(img_path) as img:
                     original_size = img.size
                 
-                # 生成图片
+                # 生成并保存图片
                 generated_images = self.sd_generator.generate(
                     prompt=finaltag_dan,
-                    group='new',  # 默认使用 new 组的负面提示词
-                    original_size=original_size
+                    group='new',
+                    original_size=original_size,
+                    width=original_size[0],
+                    height=original_size[1]
                 )
                 
                 # 保存生成的图片
+                base_name = os.path.splitext(img_name)[0]
                 for i, gen_img in enumerate(generated_images, 1):
-                    output_name = f"{os.path.splitext(img_name)[0]}_DPO{i}.png"
-                    output_path = os.path.join(output_path, output_name)
-                    gen_img.save(output_path)
-                    print(f"Saved generated image: {output_path}")
+                    output_name = f"{base_name}_DPO{i}.png"
+                    img_output_path = os.path.join(output_path, output_name)
+                    gen_img.save(img_output_path)
+                    print(f"已保存生成的图片: {img_output_path}")
 
     def _generate_tags(self, img_data: dict, artist: str) -> str:
         # 处理艺术家标签
@@ -148,21 +166,21 @@ class ImageGenerator:
         if scores_by_class:
             max_class = max(scores_by_class, key=scores_by_class.get)
             if max_class != 'masterpiece':
-                rating_tag += f'{max_class} quality, '
+                rating_tag += 'masterpiece, bestquality, '
             else:
-                rating_tag += 'masterpiece, '
+                rating_tag += 'masterpiece, bestquality, '
         
         # 组合最终标签
         finaltag_dan = f"{final_artist_tag}|||{final_features_tag}, {rating_tag}".strip(', ')
         return finaltag_dan
 
 if __name__ == "__main__":
-    dataset_path = r"path/to/dataset"
+    dataset_path = r"G:\Dataset_selected_MAPO"
     
     sd_generator = SDWebUIGenerator(
-        host="your-host",
-        port=443,
-        model="your-model"
+        host="localhost",
+        port=7860,
+        model="14.5_10e_illustrious.safetensors"
     )
     
     generator = ImageGenerator(dataset_path, sd_generator)

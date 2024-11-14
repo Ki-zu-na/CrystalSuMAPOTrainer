@@ -235,7 +235,7 @@ def main():
     
     # 直接指定路径
     dataset_path = Path(r"G:\Dataset_selected_MAPO")
-    source_dataset_path = Path(r"G:\SDXL_large_Modified")
+    source_dataset_path = Path(r"G:\DPO_TESTSET1")
     output_path = Path(r"G:\Dataset_selected_MAPO")
     
     if args.mode == 'select':
