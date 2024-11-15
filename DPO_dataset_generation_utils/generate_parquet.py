@@ -1,8 +1,13 @@
 import os
 import json
 import random
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from PIL import Image
-from datasets import Dataset, Features, Image as ImageFeature, Value
+import io
+import re
+from datetime import datetime
 
 def read_image_to_bytes(image_path, target_size=None):
     """读取图片并转换为bytes，可选择调整分辨率
@@ -103,8 +108,14 @@ def generate_caption(artist_folder, filename, results_json, src_img_path, featur
 
     return f"{prefix}, |||{suffix}"
 
-def generate_dataset(base_dir):
-    """生成数据集字典列表"""
+def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
+    """生成parquet文件
+    
+    Args:
+        base_dir: 包含多个artist文件夹的基础目录
+        output_path: 输出parquet文件的路径
+        chunk_size: 每个parquet文件的最大大小(bytes)
+    """
     data = {
         'jpg_0': [],
         'jpg_1': [], 
@@ -113,7 +124,30 @@ def generate_dataset(base_dir):
         'label_1': []
     }
     
-    # ... existing code ...
+    current_size = 0
+    file_count = 0
+    
+    # 首先计算总数据大小来估算chunks数量
+    total_size = 0
+    for artist in os.listdir(base_dir):
+        artist_dir = os.path.join(base_dir, artist)
+        if not os.path.isdir(artist_dir):
+            continue
+            
+        orig_dir = os.path.join(artist_dir, 'OriginalPic')
+        if not os.path.exists(orig_dir):
+            continue
+            
+        for img_name in os.listdir(orig_dir):
+            if not img_name.endswith(('.jpg', '.png')):
+                continue
+                
+            img_path = os.path.join(orig_dir, img_name)
+            total_size += os.path.getsize(img_path) * 4  # 原图 + 2个DPO图片 + 额外开销
+            
+    estimated_chunks = max(1, total_size // chunk_size + 1)
+    
+    # 遍历artist目录
     for artist in os.listdir(base_dir):
         artist_dir = os.path.join(base_dir, artist)
         if not os.path.isdir(artist_dir):
@@ -156,8 +190,13 @@ def generate_dataset(base_dir):
                 print(f"Warning: Not enough DPO images for {img_name}")
                 continue
             
-            # 获取原图路径
+            # 获取DPO图片的分辨率
+            with Image.open(dpo_images[0]) as dpo_img:
+                target_size = dpo_img.size
+            
+            # 读取并调整原图大小
             orig_img_path = os.path.join(orig_dir, img_name)
+            jpg_0 = read_image_to_bytes(orig_img_path, target_size)
             
             # 生成caption
             caption = generate_caption(artist_dir, img_name, results_json, orig_img_path)
@@ -167,42 +206,44 @@ def generate_dataset(base_dir):
             
             # 添加数据
             for dpo_path in selected_dpo:
-                data['jpg_0'].append(orig_img_path)
-                data['jpg_1'].append(dpo_path)
+                jpg_1 = read_image_to_bytes(dpo_path)  # DPO图片不需要调整大小
+                data['jpg_0'].append(jpg_0)
+                data['jpg_1'].append(jpg_1)
                 data['caption'].append(caption)
                 data['label_0'].append(1)
                 data['label_1'].append(0)
+                
+                current_size += len(jpg_0) + len(jpg_1)
+                
+                # 检查是否需要保存当前chunk
+                if current_size >= chunk_size:
+                    save_parquet(data, output_path, file_count, estimated_chunks)
+                    data = {k: [] for k in data}
+                    current_size = 0
+                    file_count += 1
     
-    return data
+    # 保存最后的数据
+    if any(len(v) > 0 for v in data.values()):
+        save_parquet(data, output_path, file_count, estimated_chunks)
 
-def save_dataset(data, output_path, num_shards=10):
-    """保存数据集为parquet文件"""
-    # 定义数据集特征
-    features = Features({
-        'jpg_0': ImageFeature(),
-        'jpg_1': ImageFeature(),
-        'caption': Value('string'),
-        'label_0': Value('int64'),
-        'label_1': Value('int64')
-    })
+def save_parquet(data, output_path, file_count, total_chunks):
+    """保存数据为parquet文件
     
-    # 创建Dataset对象
-    dataset = Dataset.from_dict(data, features=features)
+    Args:
+        data: 要保存的数据字典
+        output_path: 输出路径
+        file_count: 当前文件编号
+        total_chunks: 总文件数(用于格式化文件名)
+    """
+    df = pd.DataFrame(data)
+    table = pa.Table.from_pandas(df)
     
-    # 保存为parquet文件，自动分片
-    dataset.save_to_disk(
-        output_path,
-        num_shards=num_shards,
-        max_shard_size="500MB"  # 可选：设置每个分片的最大大小
-    )
-    print(f"Dataset saved to {output_path}")
+    # 格式化文件名: train-{5位数字}-of-{6位数字}
+    output_file = f"train-{file_count:05d}-of-{total_chunks:06d}.parquet"
+    pq.write_table(table, output_file)
+    print(f"Saved {output_file}")
 
 if __name__ == "__main__":
     base_dir = "path/to/base/dir"  # 修改为实际路径
     output_path = "path/to/output/dpo_dataset"  # 修改为实际输出路径
-    
-    # 生成数据集
-    data = generate_dataset(base_dir)
-    
-    # 保存数据集
-    save_dataset(data, output_path)
+    generate_parquet(base_dir, output_path)
