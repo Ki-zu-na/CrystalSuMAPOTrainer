@@ -62,14 +62,6 @@ def generate_caption(artist_folder, filename, results_json, src_img_path, featur
         if results_json[filename].get('is_AI'):
             final_rating_tag += 'ai-generated, '
         
-        scores_by_class = results_json[filename].get('scores_by_class', {})
-        if scores_by_class:
-            max_class = max(scores_by_class, key=scores_by_class.get)
-            if max_class != 'masterpiece':
-                final_rating_tag += f'{max_class} quality, '
-            elif max_class == 'masterpiece':
-                final_rating_tag += 'masterpiece, '
-        
         rating = results_json[filename].get('rating', {})
         if rating:
             max_rating = max(rating, key=rating.get)
