@@ -244,6 +244,6 @@ def save_parquet(data, output_path, file_count, total_chunks):
     print(f"Saved {output_file}")
 
 if __name__ == "__main__":
-    base_dir = "path/to/base/dir"  # 修改为实际路径
-    output_path = "path/to/output/dpo_dataset"  # 修改为实际输出路径
+    base_dir = r"G:\Dataset_selected_MAPO"  # 修改为实际路径
+    output_path = r"G:\Dataset_selected_MAPO\DPO_dataset"  # 修改为实际输出路径
     generate_parquet(base_dir, output_path)
