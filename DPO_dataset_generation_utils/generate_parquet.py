@@ -112,7 +112,7 @@ def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
     """生成parquet文件
     
     Args:
-        base_dir: 包含OriginalPic和DPO_generated目录的基础目录
+        base_dir: 包含多个artist文件夹的基础目录
         output_path: 输出parquet文件的路径
         chunk_size: 每个parquet文件的最大大小(bytes)
     """
@@ -129,23 +129,27 @@ def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
     
     # 首先计算总数据大小来估算chunks数量
     total_size = 0
-    for artist in os.listdir(os.path.join(base_dir, 'OriginalPic')):
-        artist_dir = os.path.join(base_dir, 'OriginalPic', artist)
+    for artist in os.listdir(base_dir):
+        artist_dir = os.path.join(base_dir, artist)
         if not os.path.isdir(artist_dir):
             continue
             
-        for img_name in os.listdir(artist_dir):
+        orig_dir = os.path.join(artist_dir, 'OriginalPic')
+        if not os.path.exists(orig_dir):
+            continue
+            
+        for img_name in os.listdir(orig_dir):
             if not img_name.endswith(('.jpg', '.png')):
                 continue
                 
-            img_path = os.path.join(artist_dir, img_name)
+            img_path = os.path.join(orig_dir, img_name)
             total_size += os.path.getsize(img_path) * 4  # 原图 + 2个DPO图片 + 额外开销
             
     estimated_chunks = max(1, total_size // chunk_size + 1)
     
     # 遍历artist目录
-    for artist in os.listdir(os.path.join(base_dir, 'OriginalPic')):
-        artist_dir = os.path.join(base_dir, 'OriginalPic', artist)
+    for artist in os.listdir(base_dir):
+        artist_dir = os.path.join(base_dir, artist)
         if not os.path.isdir(artist_dir):
             continue
             
@@ -158,8 +162,15 @@ def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
         with open(results_path, 'r', encoding='utf-8') as f:
             results_json = json.load(f)
             
+        orig_dir = os.path.join(artist_dir, 'OriginalPic')
+        dpo_dir = os.path.join(artist_dir, 'DPO_generated')
+        
+        if not os.path.exists(orig_dir) or not os.path.exists(dpo_dir):
+            print(f"Warning: Missing OriginalPic or DPO_generated folder in {artist}")
+            continue
+            
         # 处理每张原始图片
-        for img_name in os.listdir(artist_dir):
+        for img_name in os.listdir(orig_dir):
             if not img_name.endswith(('.jpg', '.png')):
                 continue
                 
@@ -168,7 +179,6 @@ def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
                 continue
                 
             # 查找对应的DPO生成图片
-            dpo_dir = os.path.join(base_dir, 'DPO_generated', artist)
             base_name = os.path.splitext(img_name)[0]
             dpo_images = []
             for i in range(1, 5):
@@ -185,7 +195,7 @@ def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
                 target_size = dpo_img.size
             
             # 读取并调整原图大小
-            orig_img_path = os.path.join(artist_dir, img_name)
+            orig_img_path = os.path.join(orig_dir, img_name)
             jpg_0 = read_image_to_bytes(orig_img_path, target_size)
             
             # 生成caption
