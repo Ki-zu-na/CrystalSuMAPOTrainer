@@ -145,7 +145,23 @@ def log_validation(args, unet, vae, accelerator, weight_dtype, epoch, is_final_v
 def tokenize_captions(tokenizers, examples):
     captions = []
     for caption in examples["caption"]:
-        captions.append(caption)
+        # Split caption by ||| delimiter
+        parts = caption.split("|||")
+        if len(parts) == 2:
+            # Split each part into words
+            first_words = parts[0].strip().split(",")
+            second_words = parts[1].strip().split(",")
+            
+            # Shuffle both parts
+            random.shuffle(first_words)
+            random.shuffle(second_words)
+            
+            # Combine all words without ||| delimiter
+            shuffled_caption = ",".join(first_words + second_words)
+            captions.append(shuffled_caption)
+        else:
+            # If no ||| delimiter found, use original caption
+            captions.append(caption)
 
     tokens_one = tokenizers[0](
         captions, truncation=True, padding="max_length", max_length=tokenizers[0].model_max_length, return_tensors="pt"
