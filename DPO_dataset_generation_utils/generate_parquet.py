@@ -175,24 +175,34 @@ def generate_dataset(base_dir):
     
     return data
 
-def save_parquet(data, output_path, file_count, total_chunks):
-    """保存数据为parquet文件
+def save_dataset(data, output_path, num_shards=10):
+    """保存数据集为parquet文件"""
+    # 定义数据集特征
+    features = Features({
+        'jpg_0': ImageFeature(),
+        'jpg_1': ImageFeature(),
+        'caption': Value('string'),
+        'label_0': Value('int64'),
+        'label_1': Value('int64')
+    })
     
-    Args:
-        data: 要保存的数据字典
-        output_path: 输出路径
-        file_count: 当前文件编号
-        total_chunks: 总文件数(用于格式化文件名)
-    """
-    df = pd.DataFrame(data)
-    table = pa.Table.from_pandas(df)
+    # 创建Dataset对象
+    dataset = Dataset.from_dict(data, features=features)
     
-    # 格式化文件名: train-{5位数字}-of-{6位数字}
-    output_file = f"{output_path}-{file_count:05d}-of-{total_chunks:06d}.parquet"
-    pq.write_table(table, output_file)
-    print(f"Saved {output_file}")
+    # 保存为parquet文件，自动分片
+    dataset.save_to_disk(
+        output_path,
+        num_shards=num_shards,
+        max_shard_size="500MB"  # 可选：设置每个分片的最大大小
+    )
+    print(f"Dataset saved to {output_path}")
 
 if __name__ == "__main__":
     base_dir = "path/to/base/dir"  # 修改为实际路径
     output_path = "path/to/output/dpo_dataset"  # 修改为实际输出路径
-    generate_parquet(base_dir, output_path)
+    
+    # 生成数据集
+    data = generate_dataset(base_dir)
+    
+    # 保存数据集
+    save_dataset(data, output_path)
