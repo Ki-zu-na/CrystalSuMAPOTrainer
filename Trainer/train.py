@@ -407,14 +407,21 @@ def main(args):
                     latents = latents.to(weight_dtype)
 
                 # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents).chunk(2)[0].repeat(2, 1, 1, 1)
+                noise = torch.randn_like(latents)
                 
                 # Add offset noise if enabled
                 if args.offset_noise:
                     offset = torch.randn(
-                        latents.shape[0], latents.shape[1], 1, 1, device=latents.device
+                        latents.shape[0] // 2,  # divide by 2
+                        latents.shape[1], 
+                        1, 
+                        1, 
+                        device=latents.device
                     )
-                    noise = noise + args.offset_noise_val * offset
+                    noise = noise + args.offset_noise_val * offset.repeat(1, 1, latents.shape[2], latents.shape[3])
+
+                # chunk and repeat
+                noise = noise.chunk(2)[0].repeat(2, 1, 1, 1)
                 
                 # Add input perturbation if enabled
                 if args.input_perturbation:
