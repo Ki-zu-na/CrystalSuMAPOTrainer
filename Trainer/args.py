@@ -296,7 +296,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--offset_noise_val",
         type=float,
-        default=0.1,
+        default=0.0375,
         help="Scale factor for offset noise",
     )
     parser.add_argument(
@@ -307,7 +307,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--input_perturbation_val",
         type=float,
-        default=0.1,
+        default=0.05,
         help="Interpolation value for input perturbation",
     )
 
