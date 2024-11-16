@@ -288,6 +288,28 @@ def parse_args(input_args=None):
         default=0.9999, 
         help="The beta3 parameter for the AdEMAMix optimizer."
     )
+    parser.add_argument(
+        "--offset_noise",
+        action="store_true",
+        help="Whether to add offset noise to the latents",
+    )
+    parser.add_argument(
+        "--offset_noise_val",
+        type=float,
+        default=0.1,
+        help="Scale factor for offset noise",
+    )
+    parser.add_argument(
+        "--input_perturbation",
+        action="store_true", 
+        help="Whether to add input perturbation",
+    )
+    parser.add_argument(
+        "--input_perturbation_val",
+        type=float,
+        default=0.1,
+        help="Interpolation value for input perturbation",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)

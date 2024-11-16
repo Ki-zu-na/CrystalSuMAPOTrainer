@@ -408,6 +408,17 @@ def main(args):
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents).chunk(2)[0].repeat(2, 1, 1, 1)
+                
+                # Add offset noise if enabled
+                if args.offset_noise:
+                    offset = torch.randn(
+                        latents.shape[0], latents.shape[1], 1, 1, device=latents.device
+                    )
+                    noise = noise + args.offset_noise_val * offset
+                
+                # Add input perturbation if enabled
+                if args.input_perturbation:
+                    noise = noise + args.input_perturbation_val * torch.randn_like(noise)
 
                 # Sample a random timestep for each image
                 bsz = latents.shape[0] // 2
