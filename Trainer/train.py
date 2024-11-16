@@ -256,7 +256,8 @@ def main(args):
             )
         optimizer_class = bnb.optim.PagedAdEMAMix8bit
     else:
-        optimizer_class = torch.optim.PagedAdamW
+        import bitsandbytes as bnb
+        optimizer_class = bnb.optim.PagedAdamW
 
     # Optimizer creation
     params_to_optimize = list(filter(lambda p: p.requires_grad, unet.parameters()))
