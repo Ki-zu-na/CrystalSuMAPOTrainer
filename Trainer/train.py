@@ -412,7 +412,7 @@ def main(args):
                 # Add offset noise if enabled
                 if args.offset_noise:
                     offset = torch.randn(
-                        latents.shape[0] // 2,  # 注意这里是除以2
+                        latents.shape[0] // 2,  # divide by 2
                         latents.shape[1], 
                         1, 
                         1, 
@@ -420,7 +420,7 @@ def main(args):
                     )
                     noise = noise + args.offset_noise_val * offset.repeat(1, 1, latents.shape[2], latents.shape[3])
 
-                # 然后再进行chunk和repeat
+                # chunk and repeat
                 noise = noise.chunk(2)[0].repeat(2, 1, 1, 1)
                 
                 # Add input perturbation if enabled
