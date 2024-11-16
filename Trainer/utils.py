@@ -79,7 +79,7 @@ def log_validation(args, unet, vae, accelerator, weight_dtype, epoch, is_final_v
     context = contextlib.nullcontext() if is_final_validation else torch.cuda.amp.autocast()
 
     guidance_scale = 5.0
-    num_inference_steps = 25
+    num_inference_steps = 35
     for prompt in VALIDATION_PROMPTS:
         with context:
             image = pipeline(
