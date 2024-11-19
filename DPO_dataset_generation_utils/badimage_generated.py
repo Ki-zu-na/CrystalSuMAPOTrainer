@@ -166,9 +166,9 @@ class ImageGenerator:
         if scores_by_class:
             max_class = max(scores_by_class, key=scores_by_class.get)
             if max_class != 'masterpiece':
-                rating_tag += 'masterpiece, bestquality, '
+                rating_tag += 'masterpiece, best quality, '
             else:
-                rating_tag += 'masterpiece, bestquality, '
+                rating_tag += 'masterpiece, best quality, '
         
         # 组合最终标签
         finaltag_dan = f"{final_artist_tag}|||{final_features_tag}, {rating_tag}".strip(', ')
