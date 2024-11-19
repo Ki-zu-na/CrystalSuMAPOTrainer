@@ -14,7 +14,7 @@ def load_json_data(json_path: str) -> Dict:
     with open(json_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0):
+def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0, min_side_length=512):
     """
     判断图片是否为不合格图片
     
@@ -22,22 +22,34 @@ def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0):
         image_scores: 图片的各项评分
         real_threshold: 真实照片分数阈值
         aesthetic_threshold: 美学分数阈值
+        min_side_length: 图片最小边长要求
     """
     imgscore = image_scores["imgscore"]
     anime_real_score = image_scores["anime_real_score"]
     aesthetic_score = image_scores["aesthetic_score"]
     features = image_scores["features"]
     
+    # 获取图片尺寸
+    width = features.get("width", 0)
+    height = features.get("height", 0)
+    min_side = min(width, height)
+    
     bad_imgscore_types = ["not_painting", "3d"]
     
     # 检查是否为单色图片 (monochrome值大于0.8)
     is_mono = features.get("monochrome", 0) > 0.8
     
+    # 检查comic值是否大于0.4
+    comic_score = features.get("comic", 0)
+    is_comic_high = comic_score > 0.4
+    
     return (
         max(imgscore, key=imgscore.get) in bad_imgscore_types or
         anime_real_score["real"] > real_threshold or
         aesthetic_score < aesthetic_threshold or
-        is_mono
+        is_mono or
+        is_comic_high or  # 添加comic值检查
+        min_side < min_side_length
     )
     
 def count_images_in_dirs(artist_path: Path) -> int:
@@ -71,11 +83,16 @@ def find_image_path(artist_path: Path, image_name: str) -> Path:
             return img_path
     return None
 
-def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10) -> bool:
+def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10, min_side_length: int = 512) -> bool:
     """Process single artist folder and select images"""
+    # 检查是否存在 no.dpo 文件
+    if (artist_path / "no.dpo").exists():
+        print(f"跳过 {artist_path.name}: 发现 no.dpo 文件")
+        return False
+        
     # Check if results.json exists
     if not (artist_path / "results.json").exists():
-        print(f"Skipping {artist_path.name}: results.json not found")
+        print(f"跳过 {artist_path.name}: results.json 未找到")
         return False
     
     # Load results.json
@@ -86,7 +103,7 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     bad_images = []
     
     for img_name, scores in results_json.items():
-        if not is_bad_image(scores, 0.5, 4.0):
+        if not is_bad_image(scores, 0.5, 4.0, min_side_length):
             good_images.append((img_name, scores['aesthetic_score']))
         else:
             bad_images.append((img_name, scores))
@@ -144,7 +161,11 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
             mono_score = features.get("monochrome", 0)
             meets_mono_condition = "monochrome" not in features or mono_score < 0.4
             
-            if is_illustration_highest and meets_mono_condition:
+            # 添加comic值检查
+            comic_score = features.get("comic", 0)
+            meets_comic_condition = comic_score <= 0.4
+            
+            if is_illustration_highest and meets_mono_condition and meets_comic_condition:
                 filtered_bad_images.append((img_name, scores["aesthetic_score"]))
         
         # 按aesthetic_score排序
@@ -227,22 +248,24 @@ def fix_missing_results(dataset_path: Path, source_dataset_path: Path):
             print(f"已更新 {artist_dir.name} 的 results.json")
 
 def main():
-    parser = argparse.ArgumentParser(description='处理数据集图片选择和标签修复')
+    parser = argparse.ArgumentParser(description='select original DPO pic for dataset')
     parser.add_argument('--mode', choices=['select', 'fixtagger'], required=True,
-                      help='运行模式：select-选择图片，fixtagger-修复标签')
+                      help='Operation mode: select - select images, fixtagger - fix tags')
+    parser.add_argument('--min-side', type=int, default=1300,
+                      help='Minimum side length requirement for images (default: 1300 pixels)')
     
     args = parser.parse_args()
     
     # 直接指定路径
-    dataset_path = Path(r"G:\Dataset_selected_MAPO")
-    source_dataset_path = Path(r"G:\DPO_TESTSET1")
     output_path = Path(r"G:\Dataset_selected_MAPO")
+    source_dataset_path = Path(r"G:\DPO_TESTSET1")
+
     
     if args.mode == 'select':
         failed_artists = []
         for artist_dir in source_dataset_path.iterdir():
             if artist_dir.is_dir():
-                success = process_artist_folder(artist_dir, output_path)
+                success = process_artist_folder(artist_dir, output_path, min_side_length=args.min_side)
                 if not success:
                     failed_artists.append(artist_dir.name)
         
@@ -251,7 +274,7 @@ def main():
                 f.write("\n".join(failed_artists))
                 
     elif args.mode == 'fixtagger':
-        fix_missing_results(dataset_path, source_dataset_path)
+        fix_missing_results(output_path, source_dataset_path)
 
 if __name__ == "__main__":
     main()

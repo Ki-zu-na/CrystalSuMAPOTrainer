@@ -18,11 +18,24 @@ def read_image_to_bytes(image_path, target_size=None):
     """
     img = Image.open(image_path).convert('RGB')
     if target_size:
-        img = img.resize(target_size, Image.Resampling.LANCZOS)
+        # 计算源图片和目标图片的宽高比
+        src_ratio = img.width / img.height
+        target_ratio = target_size[0] / target_size[1]
+        
+        if src_ratio > target_ratio:
+            # 源图片更宽，按高度缩放
+            new_height = target_size[1]
+            new_width = int(new_height * src_ratio)
+        else:
+            # 源图片更高，按宽度缩放
+            new_width = target_size[0]
+            new_height = int(new_width / src_ratio)
+            
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
     
     # 将图片转换为bytes
     img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='JPEG', quality=95)
+    img.save(img_byte_arr, format='JPEG', quality=100)
     return img_byte_arr.getvalue()
 
 def get_year_from_weibo_date(date_str):
@@ -231,11 +244,11 @@ def save_parquet(data, output_path, file_count, total_chunks):
     table = pa.Table.from_pandas(df)
     
     # 格式化文件名: train-{5位数字}-of-{6位数字}
-    output_file = f"train-{file_count:05d}-of-{total_chunks:06d}.parquet"
+    output_file = os.path.join(output_path, f"train-{file_count:05d}-of-{total_chunks:06d}.parquet")
     pq.write_table(table, output_file)
-    print(f"Saved {output_file}")
+    print(f"已保存 {output_file}")
 
 if __name__ == "__main__":
     base_dir = r"G:\Dataset_selected_MAPO"  # 修改为实际路径
-    output_path = r"G:\Dataset_selected_MAPO\DPO_dataset"  # 修改为实际输出路径
+    output_path = r"G:\Dataset_selected_MAPO"  # 修改为实际输出路径
     generate_parquet(base_dir, output_path)
