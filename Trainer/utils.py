@@ -141,59 +141,114 @@ def log_validation(args, unet, vae, accelerator, weight_dtype, epoch, is_final_v
                 )
 
 
-# Tokenizing captions (c)
-def tokenize_captions(tokenizers, examples):
+def process_input_ids(input_ids, tokenizer, max_length):
+    """Process input ids for long sequences"""
+    if max_length > tokenizer.model_max_length:
+        input_ids = input_ids.squeeze(0)
+        iids_list = []
+        for i in range(
+            1,
+            max_length - tokenizer.model_max_length + 2,
+            tokenizer.model_max_length - 2,
+        ):
+            ids_chunk = (
+                input_ids[0].unsqueeze(0),  # BOS
+                input_ids[i : i + tokenizer.model_max_length - 2],
+                input_ids[-1].unsqueeze(0),  # PAD or EOS
+            )
+            ids_chunk = torch.cat(ids_chunk)
+
+            if ids_chunk[-2] not in [tokenizer.eos_token_id, tokenizer.pad_token_id]:
+                ids_chunk[-1] = tokenizer.eos_token_id
+            if ids_chunk[1] == tokenizer.pad_token_id:
+                ids_chunk[1] = tokenizer.eos_token_id
+
+            iids_list.append(ids_chunk)
+
+        input_ids = torch.stack(iids_list)
+    return input_ids
+
+def tokenize_captions(tokenizers, examples, max_length=255):
     captions = []
     for caption in examples["caption"]:
         # Split caption by ||| delimiter
         parts = caption.split("|||")
         if len(parts) == 2:
-            # Split each part into words
             first_words = parts[0].strip().split(",")
             second_words = parts[1].strip().split(",")
             
-            # Shuffle both parts
             random.shuffle(first_words)
             random.shuffle(second_words)
             
-            # Combine all words without ||| delimiter
             shuffled_caption = ",".join(first_words + second_words)
             captions.append(shuffled_caption)
         else:
-            # If no ||| delimiter found, use original caption
             captions.append(caption)
 
-    tokens_one = tokenizers[0](
-        captions, truncation=True, padding="max_length", max_length=tokenizers[0].model_max_length, return_tensors="pt"
-    ).input_ids
-    tokens_two = tokenizers[1](
-        captions, truncation=True, padding="max_length", max_length=tokenizers[1].model_max_length, return_tensors="pt"
-    ).input_ids
+    # Process tokens for both tokenizers
+    def get_tokens(tokenizer, texts):
+        tokens = tokenizer(
+            texts,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="pt"
+        ).input_ids
+        return tokens
+
+    tokens_one = get_tokens(tokenizers[0], captions)
+    tokens_two = get_tokens(tokenizers[1], captions)
+    
+    # Process long sequences if needed
+    tokens_one = torch.stack([process_input_ids(inp, tokenizers[0], max_length) for inp in tokens_one])
+    tokens_two = torch.stack([process_input_ids(inp, tokenizers[1], max_length) for inp in tokens_two])
 
     return tokens_one, tokens_two
 
-
 @torch.no_grad()
-def encode_prompt(text_encoders, text_input_ids_list):
+def encode_prompt(text_encoders, text_input_ids_list, max_length=255):
     prompt_embeds_list = []
+    device = next(text_encoders[0].parameters()).device
 
     for i, text_encoder in enumerate(text_encoders):
         text_input_ids = text_input_ids_list[i]
+        
+        # Get batch size and reshape input ids
+        b_size = text_input_ids.size()[0]
+        text_input_ids = text_input_ids.reshape((-1, text_encoder.config.max_position_embeddings))
+        text_input_ids = text_input_ids.to(device)
 
-        prompt_embeds = text_encoder(
-            text_input_ids.to(text_encoder.device),
-            output_hidden_states=True,
-        )
+        # Get embeddings
+        enc_out = text_encoder(text_input_ids, output_hidden_states=True, return_dict=True)
+        
+        # Handle different encoder outputs
+        if i == len(text_encoders) - 1:  # Second text encoder
+            hidden_states = enc_out["hidden_states"][-2]
+            pooled_prompt_embeds = enc_out["text_embeds"]
+        else:  # First text encoder
+            hidden_states = enc_out["hidden_states"][11]
 
-        # We are only ALWAYS interested in the pooled output of the final text encoder
-        pooled_prompt_embeds = prompt_embeds[0]
-        prompt_embeds = prompt_embeds.hidden_states[-2]
-        bs_embed, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
-        prompt_embeds_list.append(prompt_embeds)
+        # Reshape hidden states
+        hidden_states = hidden_states.reshape((b_size, -1, hidden_states.shape[-1]))
 
+        # Process long sequences
+        if max_length is not None:
+            states_list = [hidden_states[:, 0].unsqueeze(1)]  # <BOS>
+            for j in range(1, max_length, text_encoder.config.max_position_embeddings):
+                chunk = hidden_states[:, j : j + text_encoder.config.max_position_embeddings - 2]
+                states_list.append(chunk)
+            states_list.append(hidden_states[:, -1].unsqueeze(1))  # <EOS>
+            hidden_states = torch.cat(states_list, dim=1)
+
+            if i == len(text_encoders) - 1:
+                n_chunks = max_length // 75
+                pooled_prompt_embeds = pooled_prompt_embeds[::n_chunks]
+
+        prompt_embeds_list.append(hidden_states)
+
+    # Concatenate embeddings from both encoders
     prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
-    pooled_prompt_embeds = pooled_prompt_embeds.view(bs_embed, -1)
+    
     return prompt_embeds, pooled_prompt_embeds
 
 
