@@ -14,44 +14,89 @@ def load_json_data(json_path: str) -> Dict:
     with open(json_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def is_bad_image(image_scores, real_threshold=0.5, aesthetic_threshold=4.0, min_side_length=512):
+def find_image_path(artist_path: Path, image_name: str) -> Path:
     """
-    判断图片是否为不合格图片
+    在艺术家目录的各个子文件夹中查找图片
     
     Args:
-        image_scores: 图片的各项评分
-        real_threshold: 真实照片分数阈值
-        aesthetic_threshold: 美学分数阈值
-        min_side_length: 图片最小边长要求
+        artist_path: 艺术家目录路径
+        image_name: 图片文件名（可能包含hash部分）
     """
+    # 只在这四个文件夹中查找
+    image_folders = ['2022s', 'new', 'unknown', 'undefined']
+    
+    # 从文件名中提取danbooru ID部分
+    if image_name.startswith('danbooru_'):
+        try:
+            # 提取ID部分 (danbooru_7149401_...)
+            danbooru_id = image_name.split('_')[1]
+            # 构建搜索模式
+            search_pattern = f"danbooru_{danbooru_id}_*"
+            
+            # 在指定文件夹中搜索匹配的文件
+            for folder in image_folders:
+                folder_path = artist_path / folder
+                if folder_path.exists():
+                    matches = list(folder_path.glob(search_pattern))
+                    if matches:
+                        return matches[0]  # 返回第一个匹配的文件
+        except Exception as e:
+            print(f"处理文件名时出错: {image_name}, 错误: {str(e)}")
+    
+    # 如果上述方法失败，尝试直接匹配完整文件名
+    for folder in image_folders:
+        folder_path = artist_path / folder
+        if folder_path.exists():
+            image_path = folder_path / image_name
+            if image_path.exists():
+                return image_path
+                
+    return None
+
+def get_image_dimensions(image_path: Path) -> tuple:
+    """
+    获取图片的尺寸
+    """
+    try:
+        with Image.open(image_path) as img:
+            return img.size  # 返回 (width, height)
+    except Exception as e:
+        print(f"读取图片 {image_path} 尺寸时出错: {str(e)}")
+        return (0, 0)
+
+def is_bad_image(image_scores, image_path: Path, real_threshold=0.5, aesthetic_threshold=4.0, min_side_length=512):
+    """判断图片是否为不合格图片"""
+    # 检查文件名是否以 'arg' 开头
+    if image_path.stem.lower().startswith('arg'):
+        return True
+        
     imgscore = image_scores["imgscore"]
     anime_real_score = image_scores["anime_real_score"]
     aesthetic_score = image_scores["aesthetic_score"]
-    features = image_scores["features"]
+    features = image_scores.get("features", {})
     
-    # 获取图片尺寸
-    width = features.get("width", 0)
-    height = features.get("height", 0)
+    width, height = get_image_dimensions(image_path)
     min_side = min(width, height)
     
     bad_imgscore_types = ["not_painting", "3d"]
-    
-    # 检查是否为单色图片 (monochrome值大于0.8)
     is_mono = features.get("monochrome", 0) > 0.8
-    
-    # 检查comic值是否大于0.4
-    comic_score = features.get("comic", 0)
+    comic_score = imgscore.get("comic", 0)
     is_comic_high = comic_score > 0.4
+    
+    # 检查 multiple_views 特征
+    multiple_views_score = features.get("multiple_views", 0)
+    is_multiple_views_high = multiple_views_score > 0.4
     
     return (
         max(imgscore, key=imgscore.get) in bad_imgscore_types or
         anime_real_score["real"] > real_threshold or
         aesthetic_score < aesthetic_threshold or
         is_mono or
-        is_comic_high or  # 添加comic值检查
+        is_comic_high or
+        is_multiple_views_high or  # 添加 multiple_views 检查
         min_side < min_side_length
     )
-    
+
 def count_images_in_dirs(artist_path: Path) -> int:
     """统计指定目录下的图片总数"""
     search_dirs = ['2020s', '2022s', 'new', 'unknown', 'undefined']
@@ -67,136 +112,114 @@ def count_images_in_dirs(artist_path: Path) -> int:
             total_images += len(list(dir_path.glob('*.webp')))
     return total_images
 
-def find_image_path(artist_path: Path, image_name: str) -> Path:
-    """Find the actual path of an image in the artist's directory structure"""
-    # Define allowed image extensions
-    allowed_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
-    
-    # Check if the image has allowed extension
-    if not any(image_name.lower().endswith(ext) for ext in allowed_extensions):
-        return None
-        
-    search_dirs = ['2020s', '2022s', 'new', 'unknown', 'undefined']
-    for dir_name in search_dirs:
-        img_path = artist_path / dir_name / image_name
-        if img_path.exists():
-            return img_path
-    return None
-
 def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10, min_side_length: int = 512) -> bool:
     """Process single artist folder and select images"""
-    # 检查是否存在 no.dpo 文件
     if (artist_path / "no.dpo").exists():
         print(f"跳过 {artist_path.name}: 发现 no.dpo 文件")
         return False
         
-    # Check if results.json exists
     if not (artist_path / "results.json").exists():
         print(f"跳过 {artist_path.name}: results.json 未找到")
         return False
     
-    # Load results.json
     results_json = load_json_data(artist_path / "results.json")
+    print(f"\n处理艺术家文件夹: {artist_path.name}")
     
-    # Separate good and bad images
-    good_images = []
-    bad_images = []
-    
+    # 1. 首先筛选分辨率符合要求的图片
+    resolution_filtered = []
     for img_name, scores in results_json.items():
-        if not is_bad_image(scores, 0.5, 4.0, min_side_length):
-            good_images.append((img_name, scores['aesthetic_score']))
-        else:
-            bad_images.append((img_name, scores))
+        img_path = find_image_path(artist_path, img_name)
+        if img_path is None:
+            print(f"找不到图片: {img_name}")
+            continue
+            
+        width, height = get_image_dimensions(img_path)
+        if min(width, height) >= min_side_length:
+            resolution_filtered.append((img_name, scores, img_path))
     
-    # Sort bad images by aesthetic score for potential later use
-    bad_images.sort(key=lambda x: x[1]['aesthetic_score'], reverse=True)
+    print(f"分辨率符合要求的图片数量: {len(resolution_filtered)}")
     
-    selected_images = []
-    
-    # Try to get initial 40 images from good images
-    if len(good_images) >= target_count:
-        candidates = random.sample(good_images, target_count)
+    # 2. 剔除特征不符合要求的图片
+    feature_filtered = []
+    for img_name, scores, img_path in resolution_filtered:
+        features = scores.get("features", {})
+        imgscore = scores["imgscore"]
         
-        while len(selected_images) < target_count:
-            # 获取候选图片路径并过滤掉None值
-            candidate_paths = [find_image_path(artist_path, img[0]) for img in candidates]
-            valid_paths = [(path, img) for path, img in zip(candidate_paths, candidates) if path is not None]
-            
-            if not valid_paths:  # 如果没有有效路径，跳出循环
-                break
-                
-            # 分离路径和原始候选数据
-            paths_for_clustering = [p[0] for p in valid_paths]
-            valid_candidates = [p[1] for p in valid_paths]
-            
-            # 运行聚类
+        # 检查特征值
+        is_mono = features.get("monochrome", 0) > 0.8
+        comic_score = imgscore.get("comic", 0) > 0.4
+        multiple_views = features.get("multiple_views", 0) > 0.4
+        
+        if not (is_mono or comic_score or multiple_views):
+            feature_filtered.append((img_name, scores, img_path))
+    
+    print(f"特征符合要求的图片数量: {len(feature_filtered)}")
+    
+    # 3. 对剩余图片进行LPIPS聚类
+    if feature_filtered:
+        paths_for_clustering = [str(p[2]) for p in feature_filtered]
+        try:
             clusters = lpips_clustering(paths_for_clustering)
+            print(f"聚类完成，结果: {clusters}")
             
             # 处理聚类结果
             used_clusters = set()
+            final_candidates = []
+            
+            # 首先添加每个聚类的代表图片
             for i, cluster in enumerate(clusters):
-                if cluster == -1 or cluster not in used_clusters:
-                    selected_images.append(valid_candidates[i])
-                    if cluster != -1:
-                        used_clusters.add(cluster)
+                if cluster != -1 and cluster not in used_clusters:
+                    final_candidates.append(feature_filtered[i])
+                    used_clusters.add(cluster)
             
-            # If we need more images, get new candidates from good_images, excluding already selected ones
-            if len(selected_images) < target_count:
-                remaining_count = target_count - len(selected_images)
-                new_candidates = random.sample([img for img in good_images 
-                                             if img not in selected_images], 
-                                             min(100, remaining_count))
-                candidates = selected_images + new_candidates
-    
-    # 如果选中的图片少于30张，从bad_images中补充
-    if len(selected_images) < 30:
-        # 筛选符合条件的bad_images
-        filtered_bad_images = []
-        for img_name, scores in bad_images:
-            features = scores["features"]
-            imgscore = scores["imgscore"]
+            # 添加噪声点
+            noise_points = [feature_filtered[i] for i, cluster in enumerate(clusters) if cluster == -1]
+            final_candidates.extend(noise_points)
             
-            # 检查条件：illustration分数最高且monochrome条件符合要求
-            is_illustration_highest = max(imgscore, key=imgscore.get) == "illustration"
-            mono_score = features.get("monochrome", 0)
-            meets_mono_condition = "monochrome" not in features or mono_score < 0.4
+            print(f"聚类后的候选图片数量: {len(final_candidates)}")
             
-            # 添加comic值检查
-            comic_score = features.get("comic", 0)
-            meets_comic_condition = comic_score <= 0.4
+            # 4. 对final_candidates进行最终筛选
+            good_images = []
+            bad_images = []
             
-            if is_illustration_highest and meets_mono_condition and meets_comic_condition:
-                filtered_bad_images.append((img_name, scores["aesthetic_score"]))
-        
-        # 按aesthetic_score排序
-        filtered_bad_images.sort(key=lambda x: x[1], reverse=True)
-        
-        # 补充需要的数量
-        remaining_count = target_count - len(selected_images)
-        selected_images.extend(filtered_bad_images[:remaining_count])
-
-    # Copy selected images and create new results.json
-    if len(selected_images) > 0:
-        artist_output_dir = output_path / artist_path.name
-        original_pic_dir = artist_output_dir / "OriginalPic"
-        os.makedirs(original_pic_dir, exist_ok=True)
-        
-        # 创建新的results.json数据
-        selected_results = {}
-        
-        for img_name, _ in selected_images:
-            # 复制图片到 OriginalPic 目录
-            src_path = find_image_path(artist_path, img_name)
-            if src_path:
-                shutil.copy2(src_path, original_pic_dir / img_name)
-                # 保存对应的JSON数据
-                selected_results[img_name] = results_json[img_name]
-        
-        # 保存新的results.json到artist根目录
-        with open(artist_output_dir / "results.json", 'w', encoding='utf-8') as f:
-            json.dump(selected_results, f, ensure_ascii=False, indent=4)
+            for img_name, scores, img_path in final_candidates:
+                if not is_bad_image(scores, img_path, min_side_length=min_side_length):
+                    good_images.append((img_name, scores))
+                else:
+                    bad_images.append((img_name, scores))
             
-        return len(selected_images) == target_count
+            # 如果good_images不足，从bad_images中补充
+            selected_images = good_images
+            if len(good_images) < target_count:
+                # 按aesthetic_score排序
+                bad_images.sort(key=lambda x: x[1]['aesthetic_score'], reverse=True)
+                remaining_count = target_count - len(good_images)
+                selected_images.extend(bad_images[:remaining_count])
+            elif len(good_images) > target_count:
+                selected_images = random.sample(good_images, target_count)
+            
+            # 保存结果
+            if selected_images:
+                artist_output_dir = output_path / artist_path.name
+                original_pic_dir = artist_output_dir / "OriginalPic"
+                os.makedirs(original_pic_dir, exist_ok=True)
+                
+                selected_results = {}
+                for img_name, scores in selected_images:
+                    src_path = find_image_path(artist_path, img_name)
+                    if src_path:
+                        shutil.copy2(src_path, original_pic_dir / img_name)
+                        selected_results[img_name] = results_json[img_name]
+                
+                with open(artist_output_dir / "results.json", 'w', encoding='utf-8') as f:
+                    json.dump(selected_results, f, ensure_ascii=False, indent=4)
+                
+                return len(selected_images) == target_count
+                
+        except Exception as e:
+            print(f"聚类过程发生错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     return False
 
@@ -251,14 +274,14 @@ def main():
     parser = argparse.ArgumentParser(description='select original DPO pic for dataset')
     parser.add_argument('--mode', choices=['select', 'fixtagger'], required=True,
                       help='Operation mode: select - select images, fixtagger - fix tags')
-    parser.add_argument('--min-side', type=int, default=1300,
+    parser.add_argument('--min-side', type=int, default=1279,
                       help='Minimum side length requirement for images (default: 1300 pixels)')
     
     args = parser.parse_args()
     
     # 直接指定路径
-    output_path = Path(r"G:\Dataset_selected_MAPO")
-    source_dataset_path = Path(r"G:\DPO_TESTSET1")
+    output_path = Path(r"F:\Dataset_selected_MAPO")
+    source_dataset_path = Path(r"G:\SDXL_large_Modified")
 
     
     if args.mode == 'select':
