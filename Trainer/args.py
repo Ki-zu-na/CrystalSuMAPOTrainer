@@ -325,13 +325,13 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--beta_min_ratio",
         type=float,
-        default=0.1,
+        default=0.5,
         help="Minimum ratio of original beta_mapo"
     )
     parser.add_argument(
         "--beta_max_ratio",
         type=float,
-        default=2.0,
+        default=1.5,
         help="Maximum ratio of original beta_mapo"
     )
 
