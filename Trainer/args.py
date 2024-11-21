@@ -157,8 +157,8 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--beta_mapo",
         type=float,
-        default=0.1,
-        help="ORPO contribution factor.",
+        default=0.0003,  # 调整默认值到更合适的范围
+        help="Beta value for MaPO loss",
     )
     parser.add_argument(
         "--label_noise_prob",
@@ -309,6 +309,30 @@ def parse_args(input_args=None):
         type=float,
         default=0.05,
         help="Interpolation value for input perturbation",
+    )
+    parser.add_argument(
+        "--or_window_size",
+        type=int,
+        default=100,
+        help="Window size for OR loss tracking"
+    )
+    parser.add_argument(
+        "--or_threshold",
+        type=float,
+        default=1e-6,  # 调整阈值到更小的范围
+        help="Threshold for OR loss trend to trigger beta adjustment"
+    )
+    parser.add_argument(
+        "--beta_min_ratio",
+        type=float,
+        default=0.1,
+        help="Minimum ratio of original beta_mapo"
+    )
+    parser.add_argument(
+        "--beta_max_ratio",
+        type=float,
+        default=2.0,
+        help="Maximum ratio of original beta_mapo"
     )
 
     if input_args is not None:
