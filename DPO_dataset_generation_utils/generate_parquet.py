@@ -35,7 +35,7 @@ def read_image_to_bytes(image_path, target_size=None):
     
     # 将图片转换为bytes
     img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='JPEG', quality=100)
+    img.save(img_byte_arr, format='JPEG', quality=98)
     return img_byte_arr.getvalue()
 
 def get_year_from_weibo_date(date_str):
@@ -196,8 +196,7 @@ def generate_parquet(base_dir, output_path, chunk_size=300*1024*1024):
                 continue
             
             # 获取DPO图片的分辨率
-            with Image.open(dpo_images[0]) as dpo_img:
-                target_size = dpo_img.size
+            target_size = (1408, 1408)
             
             # 读取并调整原图大小
             orig_img_path = os.path.join(orig_dir, img_name)
@@ -249,6 +248,6 @@ def save_parquet(data, output_path, file_count, total_chunks):
     print(f"已保存 {output_file}")
 
 if __name__ == "__main__":
-    base_dir = r"G:\Dataset_selected_MAPO"  # 修改为实际路径
-    output_path = r"G:\Dataset_selected_MAPO"  # 修改为实际输出路径
+    base_dir = r"F:\Dataset_selected_MAPO_2"  # 修改为实际路径
+    output_path = r"F:\Dataset_selected_MAPO_2"  # 修改为实际输出路径
     generate_parquet(base_dir, output_path)

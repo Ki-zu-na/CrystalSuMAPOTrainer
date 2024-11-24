@@ -354,68 +354,19 @@ def compute_time_ids(args, accelerator, weight_dtype, original_size, crops_coord
     return add_time_ids
 
 
-class ORLossTracker:
-    def __init__(self, window_size=100, threshold=1e-6):
-        self.window_size = window_size
-        self.threshold = threshold
-        self.or_losses = []
-        self.beta_history = []
-        
-    def update(self, or_loss):
-        """更新OR loss历史"""
-        self.or_losses.append(or_loss)
-        if len(self.or_losses) > self.window_size:
-            self.or_losses.pop(0)
-            
-    def get_loss_trend(self):
-        """计算OR loss的趋势"""
-        if len(self.or_losses) < 2:
-            return 0
-        
-        mid_point = len(self.or_losses) // 2
-        recent_avg = sum(self.or_losses[mid_point:]) / len(self.or_losses[mid_point:])
-        previous_avg = sum(self.or_losses[:mid_point]) / len(self.or_losses[:mid_point])
-        
-        return recent_avg - previous_avg
-    
-    def should_adjust_beta(self):
-        """判断是否需要调整beta"""
-        if len(self.or_losses) < self.window_size:
-            return False
-        return abs(self.get_loss_trend()) > self.threshold
-
-def compute_loss(args, noise_scheduler, model_pred, target, or_tracker=None, current_step=None):
+def compute_loss(args, noise_scheduler, model_pred, target):
     model_losses = F.mse_loss(model_pred.float(), target.float(), reduction="none")
     model_losses = model_losses.mean(dim=list(range(1, len(model_losses.shape))))
     model_losses_w, model_losses_l = model_losses.chunk(2)
-    
-    # 计算基础的log_odds
     log_odds = (args.snr_value * model_losses_w) / (torch.exp(args.snr_value * model_losses_w) - 1) - (
         args.snr_value * model_losses_l
     ) / (torch.exp(args.snr_value * model_losses_l) - 1)
 
+    # Ratio loss.
+    # By multiplying T to the inner term, we try to maximize the margin throughout the overall denoising process.
     ratio = F.logsigmoid(log_odds * noise_scheduler.config.num_train_timesteps)
-    
-    # 动态调整beta_mapo
-    current_beta = args.beta_mapo
-    if or_tracker is not None:
-        or_loss = -ratio.mean().detach().item()
-        or_tracker.update(or_loss)
-        
-        if or_tracker.should_adjust_beta():
-            loss_trend = or_tracker.get_loss_trend()
-            
-            # 调整beta的变化幅度为更小的值
-            if loss_trend > 0:  # OR loss在增加
-                # 减小beta，但保持在合理范围内
-                current_beta = max(args.beta_mapo * 0.95, args.beta_mapo * 0.5)  # 更温和的减少
-            else:  # OR loss在减少
-                # 增加beta，但保持在合理范围内
-                current_beta = min(args.beta_mapo * 1.05, args.beta_mapo * 1.5)  # 更温和的增加
-                
-        or_tracker.beta_history.append(current_beta)
-    
-    ratio_losses = current_beta * ratio
+    ratio_losses = args.beta_mapo * ratio
+
+    # Full ORPO loss
     loss = model_losses_w.mean() - ratio_losses.mean()
-    
-    return loss, model_losses_w, model_losses_l, ratio_losses, current_beta
+    return loss, model_losses_w, model_losses_l, ratio_losses

@@ -9,7 +9,7 @@ import sdeval
 from sdeval.corrupt import AICorruptMetrics
 
 class SDWebUIGenerator:
-    def __init__(self, host, port, model, batch_size=4, width=832, height=1218, max_retries=3, retry_delay=5):
+    def __init__(self, host, port, model, batch_size=3, width=832, height=1218, max_retries=3, retry_delay=5):
         self.host = host
         self.port = port
         self.model = model
@@ -175,12 +175,12 @@ class ImageGenerator:
         return finaltag_dan
 
 if __name__ == "__main__":
-    dataset_path = r"G:\Dataset_selected_MAPO"
+    dataset_path = r"F:\Dataset_selected_MAPO_3"
     
     sd_generator = SDWebUIGenerator(
         host="localhost",
         port=7860,
-        model="14.5_10e_illustrious.safetensors"
+        model="checkpoint-e3_s16250.ckpt"
     )
     
     generator = ImageGenerator(dataset_path, sd_generator)

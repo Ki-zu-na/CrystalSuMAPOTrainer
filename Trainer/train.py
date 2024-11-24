@@ -49,7 +49,6 @@ from utils import (
     get_wandb_url,
     import_model_class_from_model_name_or_path,
     log_validation,
-    ORLossTracker,
 )
 
 
@@ -391,12 +390,6 @@ def main(args):
     )
 
     unet.train()
-    # 初始化OR loss追踪器
-    or_tracker = ORLossTracker(
-        window_size=args.or_window_size,  # 例如100步
-        threshold=args.or_threshold  # 例如0.1
-    )
-    
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
@@ -476,14 +469,9 @@ def main(args):
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                # 使用更新后的compute_loss
-                loss, model_losses_w, model_losses_l, ratio_losses, current_beta = compute_loss(
-                    args=args,
-                    noise_scheduler=noise_scheduler,
-                    model_pred=model_pred,
-                    target=target,
-                    or_tracker=or_tracker,
-                    current_step=global_step
+                # Full ORPO loss
+                loss, model_losses_w, model_losses_l, ratio_losses = compute_loss(
+                    args=args, noise_scheduler=noise_scheduler, model_pred=model_pred, target=target
                 )
 
                 # Backprop.
@@ -532,24 +520,20 @@ def main(args):
 
             logs = {
                 "epoch": args.num_train_epochs * progress_bar.n / args.max_train_steps,
-                "total_loss": loss.detach().item(),
-                "beta_mapo": current_beta,
-                "or_loss": -ratio_losses.mean().detach().item(),
-                "win_score": ((args.snr_value * model_losses_w) / (torch.exp(args.snr_value * model_losses_w) - 1))
+                "total loss": loss.detach().item(),
+                "Win Score": ((args.snr_value * model_losses_w) / (torch.exp(args.snr_value * model_losses_w) - 1))
                 .mean()
                 .detach()
                 .item(),
-                "lose_score": ((args.snr_value * model_losses_l) / (torch.exp(args.snr_value * model_losses_l) - 1))
+                "Lose Score": ((args.snr_value * model_losses_l) / (torch.exp(args.snr_value * model_losses_l) - 1))
                 .mean()
                 .detach()
                 .item(),
                 "lr": lr_scheduler.get_last_lr()[0],
+                "OR loss": -ratio_losses.mean().detach().item(),
+                "model_losses_w": model_losses_w.mean().detach().item(),
+                "model_losses_l": model_losses_l.mean().detach().item(),
             }
-            
-            # 添加OR loss趋势到日志
-            if len(or_tracker.or_losses) >= 2:
-                logs["or_loss_trend"] = or_tracker.get_loss_trend()
-            
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 

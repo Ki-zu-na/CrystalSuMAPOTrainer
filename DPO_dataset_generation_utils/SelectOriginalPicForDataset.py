@@ -157,69 +157,89 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     
     # 3. 对剩余图片进行LPIPS聚类
     if feature_filtered:
-        paths_for_clustering = [str(p[2]) for p in feature_filtered]
-        try:
-            clusters = lpips_clustering(paths_for_clustering)
-            print(f"聚类完成，结果: {clusters}")
+        retry_count = 0
+        current_candidates = feature_filtered.copy()
+        selected_images = []
+        
+        while retry_count < max_retry:
+            # 如果当前候选数量不足target_count，直接使用所有候选
+            if len(current_candidates) <= target_count:
+                paths_for_clustering = [str(p[2]) for p in current_candidates]
+                try:
+                    clusters = lpips_clustering(paths_for_clustering)
+                    
+                    # 处理聚类结果：每个聚类只保留一张图片
+                    used_clusters = set()  # 使用set而不是dict
+                    final_candidates = []
+                    
+                    # 处理非噪声点和噪声点
+                    for i, cluster in enumerate(clusters):
+                        if cluster == -1 or cluster not in used_clusters:
+                            final_candidates.append(current_candidates[i])
+                            if cluster != -1:
+                                used_clusters.add(cluster)
+                    
+                    selected_images = final_candidates
+                    break
+                    
+                except Exception as e:
+                    print(f"聚类过程发生错误: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    return False
             
-            # 处理聚类结果
-            used_clusters = set()
-            final_candidates = []
+            # 随机选择target_count张图片进行聚类
+            current_batch = random.sample(current_candidates, target_count)
+            paths_for_clustering = [str(p[2]) for p in current_batch]
             
-            # 首先添加每个聚类的代表图片
-            for i, cluster in enumerate(clusters):
-                if cluster != -1 and cluster not in used_clusters:
-                    final_candidates.append(feature_filtered[i])
-                    used_clusters.add(cluster)
-            
-            # 添加噪声点
-            noise_points = [feature_filtered[i] for i, cluster in enumerate(clusters) if cluster == -1]
-            final_candidates.extend(noise_points)
-            
-            print(f"聚类后的候选图片数量: {len(final_candidates)}")
-            
-            # 4. 对final_candidates进行最终筛选
-            good_images = []
-            bad_images = []
-            
-            for img_name, scores, img_path in final_candidates:
-                if not is_bad_image(scores, img_path, min_side_length=min_side_length):
-                    good_images.append((img_name, scores))
-                else:
-                    bad_images.append((img_name, scores))
-            
-            # 如果good_images不足，从bad_images中补充
-            selected_images = good_images
-            if len(good_images) < target_count:
-                # 按aesthetic_score排序
-                bad_images.sort(key=lambda x: x[1]['aesthetic_score'], reverse=True)
-                remaining_count = target_count - len(good_images)
-                selected_images.extend(bad_images[:remaining_count])
-            elif len(good_images) > target_count:
-                selected_images = random.sample(good_images, target_count)
-            
+            try:
+                clusters = lpips_clustering(paths_for_clustering)
+                
+                # 处理聚类结果：每个聚类只保留一张图片
+                used_clusters = set()  # 使用set而不是dict
+                kept_images = []  # 直接保存图片而不是索引
+                
+                # 处理非噪声点和噪声点
+                for i, cluster in enumerate(clusters):
+                    if cluster == -1 or cluster not in used_clusters:
+                        kept_images.append(current_batch[i])
+                        if cluster != -1:
+                            used_clusters.add(cluster)
+                
+                # 如果保留的图片数量等于target_count，说明没有重复，可以直接使用
+                if len(kept_images) == target_count:
+                    selected_images = kept_images
+                    break
+                
+                # 否则，更新候选列表，移除被聚类的图片
+                current_candidates = [img for img in current_candidates if img not in current_batch]
+                
+                retry_count += 1
+                print(f"第 {retry_count} 次尝试，剩余候选图片: {len(current_candidates)}")
+                
+            except Exception as e:
+                print(f"聚类过程发生错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return False
+        
+        if selected_images:
             # 保存结果
-            if selected_images:
-                artist_output_dir = output_path / artist_path.name
-                original_pic_dir = artist_output_dir / "OriginalPic"
-                os.makedirs(original_pic_dir, exist_ok=True)
-                
-                selected_results = {}
-                for img_name, scores in selected_images:
-                    src_path = find_image_path(artist_path, img_name)
-                    if src_path:
-                        shutil.copy2(src_path, original_pic_dir / img_name)
-                        selected_results[img_name] = results_json[img_name]
-                
-                with open(artist_output_dir / "results.json", 'w', encoding='utf-8') as f:
-                    json.dump(selected_results, f, ensure_ascii=False, indent=4)
-                
-                return len(selected_images) == target_count
-                
-        except Exception as e:
-            print(f"聚类过程发生错误: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            artist_output_dir = output_path / artist_path.name
+            original_pic_dir = artist_output_dir / "OriginalPic"
+            os.makedirs(original_pic_dir, exist_ok=True)
+            
+            selected_results = {}
+            for img_name, scores, _ in selected_images:
+                src_path = find_image_path(artist_path, img_name)
+                if src_path:
+                    shutil.copy2(src_path, original_pic_dir / img_name)
+                    selected_results[img_name] = results_json[img_name]
+            
+            with open(artist_output_dir / "results.json", 'w', encoding='utf-8') as f:
+                json.dump(selected_results, f, ensure_ascii=False, indent=4)
+            
+            return True
     
     return False
 
@@ -280,8 +300,8 @@ def main():
     args = parser.parse_args()
     
     # 直接指定路径
-    output_path = Path(r"F:\Dataset_selected_MAPO")
-    source_dataset_path = Path(r"G:\SDXL_large_Modified")
+    output_path = Path(r"F:\Dataset_selected_MAPO_3")
+    source_dataset_path = Path(r"g:\DPO_TESTSET1")
 
     
     if args.mode == 'select':
