@@ -16,34 +16,32 @@ def load_json_data(json_path: str) -> Dict:
 
 def find_image_path(artist_path: Path, image_name: str) -> Path:
     """
-    在艺术家目录的各个子文件夹中查找图片
+    按优先级顺序在艺术家目录的各个子文件夹中查找图片
     
     Args:
         artist_path: 艺术家目录路径
         image_name: 图片文件名（可能包含hash部分）
     """
-    # 只在这四个文件夹中查找
-    image_folders = ['2022s', 'new', 'unknown', 'undefined']
+    # 按优先级顺序排列文件夹
+    image_folders = ['new', '2022s', 'unknown', 'undefined', '2020s']
     
     # 从文件名中提取danbooru ID部分
     if image_name.startswith('danbooru_'):
         try:
-            # 提取ID部分 (danbooru_7149401_...)
             danbooru_id = image_name.split('_')[1]
-            # 构建搜索模式
             search_pattern = f"danbooru_{danbooru_id}_*"
             
-            # 在指定文件夹中搜索匹配的文件
+            # 按优先级顺序在文件夹中搜索
             for folder in image_folders:
                 folder_path = artist_path / folder
                 if folder_path.exists():
                     matches = list(folder_path.glob(search_pattern))
                     if matches:
-                        return matches[0]  # 返回第一个匹配的文件
+                        return matches[0]
         except Exception as e:
             print(f"处理文件名时出错: {image_name}, 错误: {str(e)}")
     
-    # 如果上述方法失败，尝试直接匹配完整文件名
+    # 如果上述方法失败，按优先级顺序尝试直接匹配完整文件名
     for folder in image_folders:
         folder_path = artist_path / folder
         if folder_path.exists():
@@ -112,7 +110,7 @@ def count_images_in_dirs(artist_path: Path) -> int:
             total_images += len(list(dir_path.glob('*.webp')))
     return total_images
 
-def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 40, max_retry: int = 10, min_side_length: int = 512) -> bool:
+def process_artist_folder(artist_path: Path, output_path: Path, target_count: int = 30, max_retry: int = 10, min_side_length: int = 512) -> bool:
     """Process single artist folder and select images"""
     if (artist_path / "no.dpo").exists():
         print(f"跳过 {artist_path.name}: 发现 no.dpo 文件")
@@ -125,17 +123,29 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
     results_json = load_json_data(artist_path / "results.json")
     print(f"\n处理艺术家文件夹: {artist_path.name}")
     
-    # 1. 首先筛选分辨率符合要求的图片
+    # 1. 首先按文件夹优先级筛选分辨率符合要求的图片
     resolution_filtered = []
-    for img_name, scores in results_json.items():
-        img_path = find_image_path(artist_path, img_name)
-        if img_path is None:
-            print(f"找不到图片: {img_name}")
-            continue
-            
-        width, height = get_image_dimensions(img_path)
-        if min(width, height) >= min_side_length:
-            resolution_filtered.append((img_name, scores, img_path))
+    folder_priority = ['new', '2022s', 'unknown', 'undefined', '2020s']
+    
+    # 按优先级顺序处理每个文件夹
+    for folder in folder_priority:
+        folder_filtered = []
+        for img_name, scores in results_json.items():
+            img_path = find_image_path(artist_path, img_name)
+            if img_path is None:
+                continue
+                
+            # 检查图片是否在当前处理的文件夹中
+            if folder in str(img_path):
+                width, height = get_image_dimensions(img_path)
+                if min(width, height) >= min_side_length:
+                    folder_filtered.append((img_name, scores, img_path))
+        
+        resolution_filtered.extend(folder_filtered)
+        
+        # 如果已经收集到足够的图片，就停止继续搜索
+        if len(resolution_filtered) >= target_count * 2:  # 预留60张候选图片
+            break
     
     print(f"分辨率符合要求的图片数量: {len(resolution_filtered)}")
     
@@ -146,7 +156,7 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
         imgscore = scores["imgscore"]
         
         # 检查特征值
-        is_mono = features.get("monochrome", 0) > 0.8
+        is_mono = features.get("monochrome", 0) > 0.7
         comic_score = imgscore.get("comic", 0) > 0.4
         multiple_views = features.get("multiple_views", 0) > 0.4
         
@@ -162,22 +172,36 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
         selected_images = []
         
         while retry_count < max_retry:
-            # 如果当前候选数量不足target_count，直接使用所有候选
-            if len(current_candidates) <= target_count:
+            # 如果当前候选数量不足target_count或重试次数达到上限，直接使用所有候选进行聚类
+            if len(current_candidates) <= target_count or retry_count >= max_retry - 1:
                 paths_for_clustering = [str(p[2]) for p in current_candidates]
                 try:
                     clusters = lpips_clustering(paths_for_clustering)
                     
-                    # 处理聚类结果：每个聚类只保留一张图片
-                    used_clusters = set()  # 使用set而不是dict
-                    final_candidates = []
+                    # 创建一个字典来存储每个聚类的图片
+                    cluster_groups = {}
+                    noise_images = []
                     
-                    # 处理非噪声点和噪声点
+                    # 将图片按聚类分组
                     for i, cluster in enumerate(clusters):
-                        if cluster == -1 or cluster not in used_clusters:
-                            final_candidates.append(current_candidates[i])
-                            if cluster != -1:
-                                used_clusters.add(cluster)
+                        if cluster == -1:
+                            noise_images.append(current_candidates[i])
+                        else:
+                            if cluster not in cluster_groups:
+                                cluster_groups[cluster] = []
+                            cluster_groups[cluster].append(current_candidates[i])
+                    
+                    # 从每个聚类组中随机选择一张图片
+                    final_candidates = []
+                    for group in cluster_groups.values():
+                        final_candidates.append(random.choice(group))
+                    
+                    # 添加所有噪声点（独特的图���）
+                    final_candidates.extend(noise_images)
+                    
+                    # 如果聚类后的图片数量仍然超过目标数量，随机选择
+                    if len(final_candidates) > target_count:
+                        final_candidates = random.sample(final_candidates, target_count)
                     
                     selected_images = final_candidates
                     break
@@ -195,24 +219,35 @@ def process_artist_folder(artist_path: Path, output_path: Path, target_count: in
             try:
                 clusters = lpips_clustering(paths_for_clustering)
                 
-                # 处理聚类结果：每个聚类只保留一张图片
-                used_clusters = set()  # 使用set而不是dict
-                kept_images = []  # 直接保存图片而不是索引
+                # 创建一个字典来存储每个聚类的图片
+                cluster_groups = {}
+                noise_images = []
                 
-                # 处理非噪声点和噪声点
+                # 将图片按聚类分组
                 for i, cluster in enumerate(clusters):
-                    if cluster == -1 or cluster not in used_clusters:
-                        kept_images.append(current_batch[i])
-                        if cluster != -1:
-                            used_clusters.add(cluster)
+                    if cluster == -1:
+                        noise_images.append(current_batch[i])
+                    else:
+                        if cluster not in cluster_groups:
+                            cluster_groups[cluster] = []
+                        cluster_groups[cluster].append(current_batch[i])
+                
+                # 从每个聚类组中随机选择一张图片
+                kept_images = []
+                for group in cluster_groups.values():
+                    kept_images.append(random.choice(group))
+                
+                # 添加所有噪声点（独特的图片）
+                kept_images.extend(noise_images)
                 
                 # 如果保留的图片数量等于target_count，说明没有重复，可以直接使用
                 if len(kept_images) == target_count:
                     selected_images = kept_images
                     break
                 
-                # 否则，更新候选列表，移除被聚类的图片
-                current_candidates = [img for img in current_candidates if img not in current_batch]
+                # 修改这里：使用图片路径作为标识符来过滤
+                used_paths = {str(img[2]) for group in cluster_groups.values() for img in group}
+                current_candidates = [img for img in current_candidates if str(img[2]) not in used_paths]
                 
                 retry_count += 1
                 print(f"第 {retry_count} 次尝试，剩余候选图片: {len(current_candidates)}")
@@ -300,21 +335,36 @@ def main():
     args = parser.parse_args()
     
     # 直接指定路径
-    output_path = Path(r"F:\Dataset_selected_MAPO_3")
-    source_dataset_path = Path(r"g:\DPO_TESTSET1")
+    output_path = Path(r"F:\Dataset_selected_MAPO_Run_1126")
+    source_dataset_path = Path(r"G:\SDXL_large_Modified")
 
-    
     if args.mode == 'select':
         failed_artists = []
+        low_count_artists = []  # 新增：记录图片数量少的画师
+        
         for artist_dir in source_dataset_path.iterdir():
             if artist_dir.is_dir():
+                # 检查图片数量
+                original_pic_dir = output_path / artist_dir.name / "OriginalPic"
+                if original_pic_dir.exists():
+                    pic_count = len(list(original_pic_dir.glob('*.[jp][pn][g]*'))) + \
+                              len(list(original_pic_dir.glob('*.webp')))
+                    if 0 < pic_count < 10:  # 只记录已处理但图片数量少于10的画师
+                        low_count_artists.append(f"{artist_dir.name}: {pic_count}")
+                
                 success = process_artist_folder(artist_dir, output_path, min_side_length=args.min_side)
                 if not success:
                     failed_artists.append(artist_dir.name)
         
+        # 保存处理失败的画师列表
         if failed_artists:
-            with open("failed_artists.txt", "w") as f:
+            with open("failed_artists.txt", "w", encoding='utf-8') as f:
                 f.write("\n".join(failed_artists))
+        
+        # 保存图片数量少的画师列表
+        if low_count_artists:
+            with open("low_count_artists.txt", "w", encoding='utf-8') as f:
+                f.write("\n".join(low_count_artists))
                 
     elif args.mode == 'fixtagger':
         fix_missing_results(output_path, source_dataset_path)
