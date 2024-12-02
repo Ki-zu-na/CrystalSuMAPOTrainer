@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import random
+import math
 
 import numpy as np
 import torch
@@ -261,59 +262,93 @@ More information on all the CLI arguments and the environment are available on y
 
 def get_dataset_preprocessor(args, tokenizer_one, tokenizer_two):
     # Preprocessing the datasets.
-    train_resize = transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR)
-    train_crop = transforms.RandomCrop(args.resolution) if args.random_crop else transforms.CenterCrop(args.resolution)
     train_flip = transforms.RandomHorizontalFlip(p=1.0)
     to_tensor = transforms.ToTensor()
     normalize = transforms.Normalize([0.5], [0.5])
+
+    target_area = args.resolution * args.resolution
+    divisible = args.divisible  
+
+    def calculate_adaptive_size(height, width, target_area, divisible):
+        img_area = height * width
+        
+        # Only resize if image is larger than target area
+        if img_area > target_area:
+            scale_factor = math.sqrt(target_area / img_area)
+            width = math.floor(width * scale_factor / divisible) * divisible
+            height = math.floor(height * scale_factor / divisible) * divisible
+        
+        # Ensure dimensions are divisible by 8
+        width = width - width % divisible
+        height = height - height % divisible
+        
+        return height, width
 
     def preprocess_train(examples):
         all_pixel_values = []
         images = [Image.open(io.BytesIO(im_bytes)).convert("RGB") for im_bytes in examples["jpg_0"]]
         original_sizes = [(image.height, image.width) for image in images]
         crop_top_lefts = []
+        
+        # Calculate adaptive sizes for each image
+        adaptive_sizes = [
+            calculate_adaptive_size(h, w, target_area, divisible) 
+            for h, w in original_sizes
+        ]
 
         for col_name in ["jpg_0", "jpg_1"]:
             images = [Image.open(io.BytesIO(im_bytes)).convert("RGB") for im_bytes in examples[col_name]]
             if col_name == "jpg_1":
-                # Need to bring down the image to the same resolution.
-                # This seems like the simplest reasonable approach.
-                # "::-1" because PIL resize takes (width, height).
+                # Resize second image to match first image dimensions
                 images = [image.resize(original_sizes[i][::-1]) for i, image in enumerate(images)]
-            pixel_values = [to_tensor(image) for image in images]
+            
+            # Process each image with its adaptive size
+            pixel_values = []
+            for image, (target_h, target_w) in zip(images, adaptive_sizes):
+                # Convert to tensor first
+                img_tensor = to_tensor(image)
+                
+                # Resize only if necessary (for larger images)
+                if image.height > target_h or image.width > target_w:
+                    img_tensor = transforms.Resize(
+                        (target_h, target_w),
+                        interpolation=transforms.InterpolationMode.BILINEAR
+                    )(img_tensor)
+                
+                pixel_values.append(img_tensor)
+            
             all_pixel_values.append(pixel_values)
 
-        # Double on channel dim, jpg_y then jpg_w
+        # Process image pairs
         im_tup_iterator = zip(*all_pixel_values)
         combined_pixel_values = []
-        for im_tup, label_0 in zip(im_tup_iterator, examples["label_0"]):
-            # Label noise.
+        for im_tup, label_0, (target_h, target_w) in zip(im_tup_iterator, examples["label_0"], adaptive_sizes):
+            # Label noise
             if args.label_noise_prob is not None and random.random() < args.label_noise_prob:
                 label_0 = 1 - label_0
 
             if label_0 == 0:
                 im_tup = im_tup[::-1]
 
-            combined_im = torch.cat(im_tup, dim=0)  # no batch dim
+            combined_im = torch.cat(im_tup, dim=0)
 
-            # Resize.
-            combined_im = train_resize(combined_im)
+            # Cropping
+            if not args.random_crop:
+                y1 = max(0, int(round((combined_im.shape[1] - target_h) / 2.0)))
+                x1 = max(0, int(round((combined_im.shape[2] - target_w) / 2.0)))
+            else:
+                y1, x1, h, w = transforms.RandomCrop.get_params(
+                    combined_im, (target_h, target_w)
+                )
+            
+            combined_im = crop(combined_im, y1, x1, target_h, target_w)
+            crop_top_left = (y1, x1)
+            crop_top_lefts.append(crop_top_left)
 
-            # Flipping.
+            # Flipping
             if not args.no_hflip and random.random() < 0.5:
                 combined_im = train_flip(combined_im)
 
-            # Cropping.
-            if not args.random_crop:
-                y1 = max(0, int(round((combined_im.shape[1] - args.resolution) / 2.0)))
-                x1 = max(0, int(round((combined_im.shape[2] - args.resolution) / 2.0)))
-                combined_im = train_crop(combined_im)
-            else:
-                y1, x1, h, w = train_crop.get_params(combined_im, (args.resolution, args.resolution))
-                combined_im = crop(combined_im, y1, x1, h, w)
-
-            crop_top_left = (y1, x1)
-            crop_top_lefts.append(crop_top_left)
             combined_im = normalize(combined_im)
             combined_pixel_values.append(combined_im)
 

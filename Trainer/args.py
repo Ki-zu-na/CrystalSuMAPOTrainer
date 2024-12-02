@@ -311,6 +311,8 @@ def parse_args(input_args=None):
         help="Interpolation value for input perturbation",
     )
 
+    parser.add_argument("--divisible", type=int, default=8, help="Make sure dimensions are divisible by this number")
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
