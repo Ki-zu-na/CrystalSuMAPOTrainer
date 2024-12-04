@@ -7,3 +7,6 @@ torchvision
 wandb
 Pillow
 torchvision
+torch
+deepspeed
+peft
