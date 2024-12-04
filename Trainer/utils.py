@@ -3,6 +3,7 @@ import io
 import json
 import random
 import math
+import cv2
 
 import numpy as np
 import torch
@@ -261,103 +262,161 @@ More information on all the CLI arguments and the environment are available on y
 
 
 def get_dataset_preprocessor(args, tokenizer_one, tokenizer_two):
+
+    
     # Preprocessing the datasets.
     train_flip = transforms.RandomHorizontalFlip(p=1.0)
-    to_tensor = transforms.ToTensor()
     normalize = transforms.Normalize([0.5], [0.5])
 
     target_area = args.resolution * args.resolution
-    divisible = args.divisible  
+    divisible = args.divisible
+    batch_size = args.preprocess_batch_size
 
     def calculate_adaptive_size(height, width, target_area, divisible):
         img_area = height * width
         
-        # Only resize if image is larger than target area
         if img_area > target_area:
             scale_factor = math.sqrt(target_area / img_area)
             width = math.floor(width * scale_factor / divisible) * divisible
             height = math.floor(height * scale_factor / divisible) * divisible
         
-        # Ensure dimensions are divisible by 8
         width = width - width % divisible
         height = height - height % divisible
         
         return height, width
 
-    def preprocess_train(examples):
-        all_pixel_values = []
-        images = [Image.open(io.BytesIO(im_bytes)).convert("RGB") for im_bytes in examples["jpg_0"]]
-        original_sizes = [(image.height, image.width) for image in images]
-        crop_top_lefts = []
+    def process_image_batch(image_bytes_batch, target_sizes=None):
+        processed_images = []
+        valid_indices = []
         
-        # Calculate adaptive sizes for each image
-        adaptive_sizes = [
-            calculate_adaptive_size(h, w, target_area, divisible) 
-            for h, w in original_sizes
-        ]
-
-        for col_name in ["jpg_0", "jpg_1"]:
-            images = [Image.open(io.BytesIO(im_bytes)).convert("RGB") for im_bytes in examples[col_name]]
-            if col_name == "jpg_1":
-                # Resize second image to match first image dimensions
-                images = [image.resize(original_sizes[i][::-1]) for i, image in enumerate(images)]
-            
-            # Process each image with its adaptive size
-            pixel_values = []
-            for image, (target_h, target_w) in zip(images, adaptive_sizes):
-                # Convert to tensor first
-                img_tensor = to_tensor(image)
+        for idx, im_bytes in enumerate(image_bytes_batch):
+            try:
+                # 使用cv2读取图像
+                nparr = np.frombuffer(im_bytes, np.uint8)
+                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError("Failed to decode image")
                 
-                # Resize only if necessary (for larger images)
-                if image.height > target_h or image.width > target_w:
-                    img_tensor = transforms.Resize(
-                        (target_h, target_w),
-                        interpolation=transforms.InterpolationMode.BILINEAR
-                    )(img_tensor)
+                # BGR转RGB
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 
-                pixel_values.append(img_tensor)
+                if target_sizes is not None:
+                    # 确保尺寸符合divisible
+                    target_h, target_w = target_sizes[idx]
+                    target_w = target_w - target_w % divisible
+                    target_h = target_h - target_h % divisible
+                    # 使用LANCZOS4进行缩放
+                    image = cv2.resize(image, (target_w, target_h), 
+                                     interpolation=cv2.INTER_LANCZOS4)
+                
+                # 转换为tensor
+                img_tensor = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
+                processed_images.append(img_tensor)
+                valid_indices.append(idx)
+                
+            except Exception as e:
+                print(f"Error processing image: {e}")
+                continue
+                
+        return processed_images, valid_indices
+
+    def preprocess_train(examples):
+        num_examples = len(examples["jpg_0"])
+        all_pixel_values = []
+        all_original_sizes = []
+        all_crop_top_lefts = []
+        valid_indices = set(range(num_examples))
+
+        for i in range(0, num_examples, batch_size):
+            batch_slice = slice(i, min(i + batch_size, num_examples))
             
-            all_pixel_values.append(pixel_values)
+            # 处理第一组图像
+            images_0, valid_idx_0 = process_image_batch(examples["jpg_0"][batch_slice])
+            if not images_0:
+                continue
+                
+            original_sizes = [(img.shape[1], img.shape[2]) for img in images_0]
+            adaptive_sizes = [
+                calculate_adaptive_size(h, w, target_area, divisible) 
+                for h, w in original_sizes
+            ]
 
-        # Process image pairs
-        im_tup_iterator = zip(*all_pixel_values)
-        combined_pixel_values = []
-        for im_tup, label_0, (target_h, target_w) in zip(im_tup_iterator, examples["label_0"], adaptive_sizes):
-            # Label noise
-            if args.label_noise_prob is not None and random.random() < args.label_noise_prob:
-                label_0 = 1 - label_0
+            # 处理第二组图像
+            images_1, valid_idx_1 = process_image_batch(
+                examples["jpg_1"][batch_slice],
+                target_sizes=original_sizes
+            )
 
-            if label_0 == 0:
-                im_tup = im_tup[::-1]
+            batch_valid_indices = set(valid_idx_0) & set(valid_idx_1)
+            valid_indices &= {idx + i for idx in batch_valid_indices}
 
-            combined_im = torch.cat(im_tup, dim=0)
+            for idx in batch_valid_indices:
+                img_0 = images_0[valid_idx_0.index(idx)]
+                img_1 = images_1[valid_idx_1.index(idx)]
+                
+                target_h, target_w = adaptive_sizes[valid_idx_0.index(idx)]
+                
+                # 如果需要进一步调整大小
+                if img_0.shape[1] > target_h or img_0.shape[2] > target_w:
+                    # 转换回numpy进行resize
+                    img_0_np = img_0.numpy().transpose(1, 2, 0)
+                    img_1_np = img_1.numpy().transpose(1, 2, 0)
+                    
+                    img_0_np = cv2.resize(img_0_np, (target_w, target_h), 
+                                        interpolation=cv2.INTER_LANCZOS4)
+                    img_1_np = cv2.resize(img_1_np, (target_w, target_h), 
+                                        interpolation=cv2.INTER_LANCZOS4)
+                    
+                    # 转回tensor
+                    img_0 = torch.from_numpy(img_0_np.transpose(2, 0, 1)).float()
+                    img_1 = torch.from_numpy(img_1_np.transpose(2, 0, 1)).float()
 
-            # Cropping
-            if not args.random_crop:
-                y1 = max(0, int(round((combined_im.shape[1] - target_h) / 2.0)))
-                x1 = max(0, int(round((combined_im.shape[2] - target_w) / 2.0)))
-            else:
-                y1, x1, h, w = transforms.RandomCrop.get_params(
-                    combined_im, (target_h, target_w)
-                )
-            
-            combined_im = crop(combined_im, y1, x1, target_h, target_w)
-            crop_top_left = (y1, x1)
-            crop_top_lefts.append(crop_top_left)
+                # 处理标签噪声
+                label_0 = examples["label_0"][idx + i]
+                if args.label_noise_prob is not None and random.random() < args.label_noise_prob:
+                    label_0 = 1 - label_0
 
-            # Flipping
-            if not args.no_hflip and random.random() < 0.5:
-                combined_im = train_flip(combined_im)
+                im_pair = (img_0, img_1) if label_0 == 1 else (img_1, img_0)
+                combined_im = torch.cat(im_pair, dim=0)
 
-            combined_im = normalize(combined_im)
-            combined_pixel_values.append(combined_im)
+                # 裁剪
+                if not args.random_crop:
+                    y1 = max(0, int(round((combined_im.shape[1] - target_h) / 2.0)))
+                    x1 = max(0, int(round((combined_im.shape[2] - target_w) / 2.0)))
+                else:
+                    y1, x1, h, w = transforms.RandomCrop.get_params(
+                        combined_im, (target_h, target_w)
+                    )
 
-        examples["pixel_values"] = combined_pixel_values
-        examples["original_sizes"] = original_sizes
-        examples["crop_top_lefts"] = crop_top_lefts
-        tokens_one, tokens_two = tokenize_captions([tokenizer_one, tokenizer_two], examples)
-        examples["input_ids_one"] = tokens_one
-        examples["input_ids_two"] = tokens_two
+                combined_im = crop(combined_im, y1, x1, target_h, target_w)
+                crop_top_left = (y1, x1)
+
+                # 翻转
+                if not args.no_hflip and random.random() < 0.5:
+                    combined_im = train_flip(combined_im)
+
+                combined_im = normalize(combined_im)
+                
+                all_pixel_values.append(combined_im)
+                all_original_sizes.append(original_sizes[valid_idx_0.index(idx)])
+                all_crop_top_lefts.append(crop_top_left)
+
+        # 只保留有效样本
+        valid_indices = sorted(list(valid_indices))
+        examples = {k: [v[i] for i in valid_indices] for k, v in examples.items()}
+        
+        examples["pixel_values"] = all_pixel_values
+        examples["original_sizes"] = all_original_sizes
+        examples["crop_top_lefts"] = all_crop_top_lefts
+
+        try:
+            tokens_one, tokens_two = tokenize_captions([tokenizer_one, tokenizer_two], examples)
+            examples["input_ids_one"] = tokens_one
+            examples["input_ids_two"] = tokens_two
+        except Exception as e:
+            print(f"Error in tokenization: {e}")
+            return None
+
         return examples
 
     return preprocess_train
