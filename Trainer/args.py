@@ -310,8 +310,17 @@ def parse_args(input_args=None):
         default=0.05,
         help="Interpolation value for input perturbation",
     )
+    parser.add_argument(
+        "--divisible", 
+        type=int, 
+        default=8, 
+        help="Make sure dimensions are divisible by this number")
 
-    parser.add_argument("--divisible", type=int, default=8, help="Make sure dimensions are divisible by this number")
+    parser.add_argument(
+        "--preprocess_batch_size", 
+        type=int, 
+        default=12, 
+        help="Batch size for preprocessing")
 
     if input_args is not None:
         args = parser.parse_args(input_args)
